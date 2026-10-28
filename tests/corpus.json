@@ -1,0 +1,23 @@
+{
+  "description": "Synthetic/public everyday examples, not collected user input. Regression examples, not a statistical quality benchmark.",
+  "positive": {
+    "ghbdtn": "привет",
+    "cgfcb,j": "спасибо",
+    "gj;fkeqcnf": "пожалуйста",
+    "hfpvth": "размер",
+    "hf,jnf": "работа",
+    "ctujlyz": "сегодня",
+    "pfdnhf": "завтра",
+    "ghjdthrf": "проверка",
+    "yfcnhjqrb": "настройки",
+    "lfdfq": "давай",
+    "руддщ": "hello"
+  },
+  "negative": [
+    "hello", "world", "private", "python", "github", "apple", "alex", "dmitry",
+    "API", "HTTP", "NASA", "GHBDTN", "ПРИВЕТ", "СССР", "D", "В",
+    "привет", "сегодня", "завтра", "магазин", "настройки", "работа",
+    "helloпривет", "hello@example.com", "https://example.com", "git_status",
+    "abc123", "x=1", "foo-bar", "qwerty", "d", "a", "i", "в", "я"
+  ]
+}

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lado"
+version = "0.1.0"
+description = "A small, offline RU/EN keyboard layout companion"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "sirdimitry"}]
+license = "MIT"
+dependencies = [
+  "pyobjc-framework-Cocoa>=11,<13; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz>=11,<13; sys_platform == 'darwin'",
+  "pyobjc-framework-ApplicationServices>=11,<13; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+lado = "lado.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lado = ["data/*.json.gz", "data/*.md", "data/*.txt", "resources/*"]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6,<7", "pillow>=11"]
+lexicon = ["wordfreq==3.1.1"]
