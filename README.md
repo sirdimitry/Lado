@@ -20,7 +20,9 @@ boundaries](docs/PRIVACY.md), including password-field limitations.
 **0.1.0 is an early macOS preview**, not a claim of universal editor compatibility.
 The shared engine, native adapter, menu-bar UI and DMG packaging are implemented.
 See [validation](docs/VALIDATION.md) for completed checks and outstanding manual
-checks. No neural model is bundled in this version: it uses compact local word
+checks. End-to-end editor compatibility is still under validation; use a disposable
+text field for testing. Word replacement is skipped when an editor does not support
+the required Accessibility operation. No neural model is bundled in this version: it uses compact local word
 frequency tables. A small local model will be evaluated separately against this
 baseline, including its memory cost.
 

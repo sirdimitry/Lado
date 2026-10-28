@@ -147,6 +147,11 @@ def selected_range(element):
     return tuple(pair) if ok else None
 
 
+def set_range(element, pair):
+    value = A.AXValueCreate(A.kAXValueCFRangeType, pair)
+    return A.AXUIElementSetAttributeValue(element, "AXSelectedTextRange", value) == 0
+
+
 @dataclass
 class Focus:
     state: str
@@ -274,12 +279,6 @@ class MacBackend:
         Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)
         Q.CGEventTapPostEvent(proxy, event)
 
-    def _key(self, proxy, code):
-        for down in (True, False):
-            event = Q.CGEventCreateKeyboardEvent(None, code, down)
-            Q.CGEventSetFlags(event, 0)
-            self._post(proxy, event)
-
     def _unicode_events(self, text):
         # A scalar per event is accepted by more text input clients than a string
         # payload. Both halves of the key cycle carry the same Unicode override.
@@ -304,17 +303,32 @@ class MacBackend:
     def _replace_tail(self, proxy, edit, pending_separator=""):
         if not edit or self.sources.secure():
             return False
-        # Construct all bounded word-replacement payloads before any destructive
-        # key events. Conversion/allocation errors must leave the original intact.
-        replacement = list(self._unicode_events(edit.after))
-        observed = self.buffer.last_edit
-        delete = edit.before[:-len(pending_separator)] if pending_separator else edit.before
-        for _ in delete:
-            self._key(proxy, 51)
-        for event in replacement:
-            self._post(proxy, event)
+        # Prefer a bounded, validated AX replacement. Never erase a word with a
+        # burst of Backspace events and then hope a Unicode insertion succeeds.
+        element = self.focus.element
+        old_range = selected_range(element)
+        observed = edit.before[:-len(pending_separator)] if pending_separator else edit.before
+        count = len(observed.encode("utf-16-le")) // 2
+        err, writable = A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)
+        if err or not writable or not old_range or old_range[1] or old_range[0] < count:
+            self.buffer.clear()
+            return False
+        replacement_range = (old_range[0] - count, count)
+        if not set_range(element, replacement_range):
+            self.buffer.clear()
+            return False
+        # Read only the bounded span we already observed, never the document.
+        if self.sources.secure() or attr(element, "AXSelectedText") != observed:
+            set_range(element, old_range)
+            self.buffer.clear()
+            return False
+        if A.AXUIElementSetAttributeValue(element, "AXSelectedText", edit.after) != 0:
+            set_range(element, old_range)
+            self.buffer.clear()
+            return False
+        end = replacement_range[0] + len(edit.after.encode("utf-16-le")) // 2
+        set_range(element, (end, 0))
         self._switch(edit.target)
-        self.buffer.last_edit = observed
         return True
 
     def _selection(self, proxy, focus):

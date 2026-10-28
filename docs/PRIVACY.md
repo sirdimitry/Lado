@@ -12,9 +12,13 @@
   128 символов. Переполнение отключает обработку данного токена.
 - Контекст сбрасывается при смене поля/приложения/чужой раскладки, щелчке мышью,
   перемещении курсора, сочетании клавиш, паузе и после 30 секунд бездействия.
-- Выделение читается только по явному двойному Shift и ограничено 65 536
+- Существующее пользовательское выделение читается только по явному двойному Shift и ограничено 65 536
   единицами UTF-16. Последняя операция может оставаться в RAM до 30 секунд для
   точного возврата. Это не постоянная история и не журнал.
+- При замене слова дополнительно сверяется только короткий диапазон уже
+  наблюдавшегося слова. Весь документ не считывается. Если редактор не поддерживает
+  безопасную замену через Accessibility, исправление слова пропускается; серии
+  удаляющих Backspace не используются.
 
 На диске: `~/Library/Application Support/Lado/settings.json` — только настройки,
 явно добавленные исключения слов и bundle ID приложений. Файл создаётся с правами
@@ -59,9 +63,11 @@ automatic update check, or model download. Normal operation is entirely offline.
 The bounded RAM context contains up to three completed words and one current word
 (128 characters each), plus a single temporary reversible edit. It is cleared on
 focus changes, clicks, navigation, shortcuts, pause, other layouts and after 30
-idle seconds. A selection is read only on explicit double Shift, capped at 65,536
+idle seconds. An existing user selection is read only on explicit double Shift, capped at 65,536
 UTF-16 code units. Only its last reversible operation is retained, for up to 30
-seconds. No clipboard access is used.
+seconds. Word replacement validates only the bounded span already observed; it
+does not read the document. Unsupported Accessibility word replacement is skipped,
+without destructive Backspace bursts. No clipboard access is used.
 
 Only preferences and explicit word/app exceptions are persisted in
 `~/Library/Application Support/Lado/settings.json` (mode `0600`). Optional start at

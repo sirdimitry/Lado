@@ -26,6 +26,7 @@ class MacSafetyTests(unittest.TestCase):
         b.disabled = False
         b.defer = Mock()
         b.notify = Mock()
+        b.focus = M.Focus("active", element=object())
         return b
 
     def test_blocked_states_never_read_event_characters(self):
@@ -110,11 +111,39 @@ class MacSafetyTests(unittest.TestCase):
                 self.assertEqual(Q.CGEventKeyboardGetUnicodeString(event,8,None,None)[1], char)
                 self.assertEqual(Q.CGEventGetFlags(event), 0)
 
-    def test_payload_failure_happens_before_deletion(self):
+    def test_unsupported_replacement_never_deletes(self):
         from lado.engine import Edit
         b = self.make_backend()
-        b._key = Mock()
-        b._unicode_events = Mock(side_effect=ValueError("synthetic failure"))
-        with self.assertRaises(ValueError):
-            b._replace_tail(None, Edit("ghbdtn", "привет", "ru"))
-        b._key.assert_not_called()
+        b._post = Mock()
+        with patch.object(M, "selected_range", return_value=(6,0)), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,False)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as write:
+            self.assertFalse(b._replace_tail(None, Edit("ghbdtn", "привет", "ru")))
+        write.assert_not_called()
+        b._post.assert_not_called()
+
+    def test_tail_span_is_validated_before_replacement(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        with patch.object(M, "selected_range", return_value=(6,0)), \
+             patch.object(M, "set_range", return_value=True) as select, \
+             patch.object(M, "attr", return_value="other!"), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as write:
+            self.assertFalse(b._replace_tail(None, Edit("ghbdtn", "привет", "ru")))
+        write.assert_not_called()
+        self.assertEqual(select.call_args.args[1], (6,0))
+
+    def test_atomic_word_replacement_includes_pending_separator(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        b._switch = Mock()
+        with patch.object(M, "selected_range", return_value=(6,0)), \
+             patch.object(M, "set_range", return_value=True) as select, \
+             patch.object(M, "attr", return_value="ghbdtn"), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", return_value=0) as write:
+            self.assertTrue(b._replace_tail(None, Edit("ghbdtn ", "привет ", "ru"), " "))
+        self.assertEqual(write.call_args.args[2], "привет ")
+        self.assertEqual(select.call_args.args[1], (7,0))
+        b._switch.assert_called_once_with("ru")

@@ -12,8 +12,10 @@ need its own adapter and UI, not a rewrite of the correction engine.
    about the caret or focused element are no longer reliable.
 4. **Decision:** local dictionary frequency difference, uppercase/exception/token
    guards and stronger context requirements for single-letter tokens.
-5. **Replacement:** marked Unicode/key events at the current event tap, or an
-   accessibility selected-text replacement when supported. No clipboard access.
+5. **Replacement:** words use a validated, bounded accessibility range and
+   selected-text replacement; unsupported word replacements are skipped without
+   deleting anything. Explicit user selections use accessibility replacement or
+   marked Unicode events. No clipboard access.
 6. **Source:** TIS APIs identify/select the configured layout. Key mappings are
    built from the installed layout data rather than assuming all Russian layouts
    have identical punctuation.
