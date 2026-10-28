@@ -18,6 +18,8 @@ boundaries](docs/PRIVACY.md), including password-field limitations.
 ## Status
 
 **0.1.0 is an early macOS preview**, not a claim of universal editor compatibility.
+The installer candidate is currently in a **draft GitHub release** for the owner;
+there is no public binary release until the live compatibility retest passes.
 The shared engine, native adapter, menu-bar UI and DMG packaging are implemented.
 See [validation](docs/VALIDATION.md) for completed checks and outstanding manual
 checks. End-to-end editor compatibility is still under validation; use a disposable
@@ -48,7 +50,7 @@ This is **keyboard-layout conversion, not translation**: `hello` → `руддщ
 Mixed-script selections convert letters in both directions; ambiguous punctuation
 follows the dominant script. A selection does not change the active layout.
 
-## Install on macOS
+## Preview installation
 
 1. Download the **macOS arm64 DMG** from [Releases](https://github.com/sirdimitry/Lado/releases).
 2. Drag **Lado.app** to **Applications**, then launch that copy.
