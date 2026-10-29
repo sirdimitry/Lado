@@ -23,7 +23,8 @@ def main():
         buf.feed("ghbdtn")
         assert buf.manual().after == "привет"
         assert buf.manual().after == "ghbdtn"
-        result = {"status": "ok", "version": "0.1.0", "network": "none"}
+        from . import __version__
+        result = {"status": "ok", "version": __version__, "network": "none"}
         if sys.platform == "darwin":
             from .platforms.macos import InputSources
             import ApplicationServices as A
