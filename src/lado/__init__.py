@@ -1,3 +1,3 @@
-"""Lado has no network client and never persists typed text."""
+"""Local text processing with an isolated optional GitHub update checker."""
 
 __version__ = "0.1.0"

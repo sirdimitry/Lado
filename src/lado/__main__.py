@@ -3,6 +3,14 @@ import sys
 
 
 def main():
+    if "--check-updates" in sys.argv:
+        from . import __version__
+        from .updates import fetch_releases, find_update
+        releases, _, status = fetch_releases()
+        update = find_update(releases, __version__) if status == "ok" else None
+        print(json.dumps({"status": status, "available_version": update.version if update else None,
+                          "contains_typed_text": False}))
+        raise SystemExit(0 if status == "ok" else 1)
     if "--self-test" in sys.argv:
         from .engine import Buffer, Detector
         from .settings import Settings

@@ -15,6 +15,7 @@ class MacSafetyTests(unittest.TestCase):
     def make_backend(self):
         b = M.MacBackend.__new__(M.MacBackend)
         b.settings = Settings()
+        b.test_bundle = None
         b.detector = Detector(b.settings)
         b.buffer = Buffer(b.detector)
         b.gesture = DoubleShift()
@@ -53,6 +54,21 @@ class MacSafetyTests(unittest.TestCase):
         Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, M.TAG)
         b._handle(None, Q.kCGEventKeyDown, event)
         b.refresh.assert_not_called()
+
+    def test_compatibility_mode_excludes_other_apps_before_field_reads(self):
+        b = self.make_backend()
+        b.test_bundle = "com.sirdimitry.lado-testpad"
+        foreground = Mock()
+        foreground.processIdentifier.return_value = 54321
+        foreground.bundleIdentifier.return_value = "example.other-app"
+        workspace = Mock()
+        workspace.frontmostApplication.return_value = foreground
+        with patch.object(M.A, "AXIsProcessTrusted", return_value=True), \
+             patch.object(Q, "CGPreflightPostEventAccess", return_value=True), \
+             patch.object(M.K, "NSWorkspace", Mock(sharedWorkspace=Mock(return_value=workspace))), \
+             patch.object(M, "attr") as read:
+            self.assertEqual(b.check_focus().state, "excluded")
+        read.assert_not_called()
 
     def test_secure_transition_discards_context_and_undo(self):
         b = self.make_backend()

@@ -8,29 +8,29 @@ A small macOS menu-bar companion for typing in Russian and English. Forgot the
 layout? `ghbdtn` → `привет`. Press **Shift twice** to convert a word or a selection.
 Built with Python and native macOS interfaces. Windows support is planned.
 
-**Offline. No typing history. No telemetry. No accounts. No subscription.**
+**Local text processing. No typing history. No telemetry. No accounts. No subscription.**
 
 Lado does not transmit your typing or save it to disk. A bounded, short-lived
 context exists in RAM to make corrections possible. Only your preferences and
 explicitly added personal exceptions are saved. See [the exact privacy
-boundaries](docs/PRIVACY.md), including password-field limitations.
+boundaries](docs/PRIVACY.md), including password-field limitations and the optional GitHub update check.
 
 ## Status
 
 **0.1.0 is an early macOS preview**, not a claim of universal editor compatibility.
-The installer candidate is currently in a **draft GitHub release** for the owner;
-there is no public binary release until the live compatibility retest passes.
+The Apple Silicon DMG is available in [GitHub Releases](https://github.com/sirdimitry/Lado/releases).
 The shared engine, native adapter, menu-bar UI and DMG packaging are implemented.
 See [validation](docs/VALIDATION.md) for completed checks and outstanding manual
-checks. End-to-end editor compatibility is still under validation; use a disposable
-text field for testing. Word replacement is skipped when an editor does not support
+checks. The installed app passed 19 isolated live checks in native macOS text and
+secure fields, plus 53 automated checks. Other editors still need individual
+compatibility testing. Word replacement is skipped when an editor does not support
 the required Accessibility operation. No neural model is bundled in this version: it uses compact local word
 frequency tables. A small local model will be evaluated separately against this
 baseline, including its memory cost.
 
 ## What it does
 
-- Shows the current working language, **RU / EN**, in the menu bar.
+- Shows the current working language, **RU / EN** as a single menu-bar indicator, with a small lock overlay during secure input.
 - Corrects confident layout mistakes at a word boundary, including short tokens
   when surrounding words support the correction.
 - Skips **ALL-CAPS** words during automatic correction.
@@ -45,6 +45,8 @@ baseline, including its memory cost.
 - Disables processing and clears context for detected secure input, shows a dim
   lock icon, and resumes with empty context afterwards.
 - Includes pause, optional start at login, settings and About with author links.
+- Checks published GitHub releases at startup and hourly, and offers a matching DMG
+  when a newer version is available. Disable automatic checks in Settings.
 
 This is **keyboard-layout conversion, not translation**: `hello` → `руддщ`.
 Mixed-script selections convert letters in both directions; ambiguous punctuation
@@ -67,6 +69,19 @@ for normal use. Intel builds and Windows installers are not provided yet.
 Default exclusions include Terminal, iTerm, VS Code, Xcode and common 1Password
 bundle IDs. Review this list in Settings. Password managers with other bundle IDs
 should be added explicitly.
+
+## Updates
+
+Keyboard-layout detection and conversion work offline. The optional update checker
+contacts only the public GitHub release API, without typed text, personal exceptions,
+accounts or device identifiers. It considers published releases (including previews),
+ignores drafts and selects a DMG for your processor.
+
+When a new version is found, Lado offers **Update / Later**, waiting until you stop
+typing and avoiding protected fields. Update opens the validated GitHub DMG download
+in your default browser; install it by dragging Lado to Applications. No silent
+installation or automatic replacement of the running app. You can also choose
+**Check for Updates…** manually.
 
 ## Double Shift details
 

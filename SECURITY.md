@@ -1,6 +1,7 @@
 # Security and privacy
 
-Lado has no typing history, telemetry or network client. Typed context exists only
+Lado has no typing history or telemetry. Its optional updater requests only fixed
+public GitHub release metadata, never typing or personal exceptions. Typed context exists only
 in bounded, short-lived RAM. Only explicit settings and exceptions are persisted.
 
 Read [the complete privacy boundaries](docs/PRIVACY.md), including secure-field

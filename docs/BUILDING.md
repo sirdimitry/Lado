@@ -49,3 +49,24 @@ Grant permissions to the exact app copy being tested. Moving between source runs
 build folders and Applications can produce separate identities in macOS privacy
 settings. Never change the bundle ID between normal releases. Stable Developer ID
 signing is recommended for a mature release to improve permission continuity.
+
+## Isolated native compatibility run
+
+Compile `scripts/manual_fixture.swift` with `swiftc -target arm64-apple-macos13.0`
+into `build/LadoTestPad.app` (bundle ID `com.sirdimitry.lado-testpad`). Launch the
+fixture, then start the installed Lado with:
+
+```sh
+open /Applications/Lado.app --args --compatibility-test --run-compatibility-test --fixture-root "$PWD"
+```
+
+The runner requires permission for that exact signed app, accepts only the
+project-owned fixture, aborts if focus leaves it, restores temporary settings,
+writes non-text PASS/FAIL metadata to `build/compatibility-results.json` and closes
+both apps. It does not contact GitHub. To test HTTPS separately without starting
+input monitoring, run `Lado.app/Contents/MacOS/Lado --check-updates`.
+
+Ad-hoc rebuilds can invalidate macOS access while the old row remains enabled.
+Remove the stale Lado entry and re-add the exact app copy in Accessibility (named
+Device Control and Data Access on newer macOS). Toggling the old row alone may not
+refresh its code requirement. Normal releases should use stable Developer ID signing.

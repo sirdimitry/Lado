@@ -62,7 +62,7 @@ for text, pos, size, font, color in [
     ("Lado", (520,164), 142, BOLD, IVORY),
     ("Your words stay with you.", (530,335), 31, FONT, IVORY),
     ("RU / EN", (533,125), 18, MONO, ORANGE),
-    ("OFFLINE   /   NO TYPING HISTORY   /   macOS", (82,562), 18, MONO, IVORY),
+    ("LOCAL TYPING   /   NO TYPING HISTORY   /   macOS", (82,562), 18, MONO, IVORY),
 ]:
     d.text(pos, text, font=ImageFont.truetype(font,size), fill=color)
 d.rectangle((84,522,1196,524), fill=ORANGE)
@@ -73,6 +73,6 @@ banner.save(OUT / "github-banner.png")
 <g fill="{IVORY}" font-family="Arial, sans-serif"><text x="520" y="297" font-size="142" font-weight="700">Lado</text>
 <text x="530" y="366" font-size="31">Your words stay with you.</text></g>
 <g font-family="monospace" font-size="18"><text x="533" y="144" fill="{ORANGE}">RU / EN</text>
-<text x="82" y="580" fill="{IVORY}">OFFLINE   /   NO TYPING HISTORY   /   macOS</text></g>
+<text x="82" y="580" fill="{IVORY}">LOCAL TYPING   /   NO TYPING HISTORY   /   macOS</text></g>
 <rect x="84" y="522" width="1113" height="3" fill="{ORANGE}"/></svg>\n''')
 print("Brand assets rendered:", OUT)

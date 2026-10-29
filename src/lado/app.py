@@ -7,11 +7,13 @@ import sys
 import AppKit as K
 import ApplicationServices as A
 import Foundation as N
+import Quartz as Q
 import objc
 
 from . import __version__
 from .settings import load, save
 from .platforms.macos import MacBackend
+from .updates import UpdateService, trusted_download
 
 RUSSIAN = str(N.NSLocale.preferredLanguages()[0]).startswith("ru")
 
@@ -44,6 +46,24 @@ def button(text, frame, target, action):
     return b
 
 
+def status_image(code, locked=False):
+    """One compact indicator; the lock is part of the same image."""
+    image = K.NSImage.alloc().initWithSize_((24, 18))
+    image.lockFocus()
+    attributes = {K.NSFontAttributeName: K.NSFont.monospacedSystemFontOfSize_weight_(12, K.NSFontWeightSemibold),
+                  K.NSForegroundColorAttributeName: K.NSColor.blackColor()}
+    text = N.NSAttributedString.alloc().initWithString_attributes_(code, attributes)
+    text.drawAtPoint_((1, 2))
+    if locked:
+        lock = K.NSImage.imageWithSystemSymbolName_accessibilityDescription_("lock.fill", "Secure input")
+        if lock:
+            lock.drawInRect_fromRect_operation_fraction_(((13, 0), (8, 8)), ((0, 0), (0, 0)),
+                K.NSCompositingOperationSourceOver, 1.0)
+    image.unlockFocus()
+    image.setTemplate_(True)
+    return image
+
+
 STATES = {
     "active": ("Готово", "Ready"),
     "secure": ("Защищённый ввод — Lado отключён", "Secure input — Lado is inactive"),
@@ -63,7 +83,12 @@ class LadoDelegate(N.NSObject):
         self.pending = []
         self.preferences = None
         self.about = None
-        self.backend = MacBackend(self.settings, self.updateStatus_, self.defer)
+        self.available_update = None
+        self.pending_update = None
+        self.seen_updates = set()
+        self.update_service = UpdateService(__version__)
+        test_bundle = "com.sirdimitry.lado-testpad" if "--compatibility-test" in sys.argv else None
+        self.backend = MacBackend(self.settings, self.updateStatus_, self.defer, test_bundle=test_bundle)
         main = K.NSMenu.alloc().init()
         root_item = K.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("Lado", None, "")
         main.addItem_(root_item)
@@ -77,6 +102,11 @@ class LadoDelegate(N.NSObject):
             m.setTarget_(self)
             app_menu.addItem_(m)
         K.NSApp.setMainMenu_(main)
+        if test_bundle:
+            item = K.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "Run isolated compatibility test", "runCompatibility:", "t")
+            item.setTarget_(self)
+            app_menu.insertItem_atIndex_(item, 0)
         self.item = K.NSStatusBar.systemStatusBar().statusItemWithLength_(K.NSVariableStatusItemLength)
         self.menu = K.NSMenu.alloc().init()
         self.state_item = self.addItem("Lado", None)
@@ -86,6 +116,7 @@ class LadoDelegate(N.NSObject):
         self.pause_item = self.addItem(t("Пауза", "Pause"), "togglePause:")
         self.exclude_item = self.addItem(t("Не работать в этом приложении", "Exclude current application"), "excludeApp:")
         self.menu.addItem_(K.NSMenuItem.separatorItem())
+        self.update_item = self.addItem(t("Проверить обновления…", "Check for Updates…"), "checkUpdates:")
         self.permission_item = self.addItem(t("Разрешения macOS…", "macOS permissions…"), "permissions:")
         self.addItem(t("Настройки…", "Settings…"), "showPreferences:")
         self.addItem(t("О Lado…", "About Lado…"), "showAbout:")
@@ -124,6 +155,71 @@ class LadoDelegate(N.NSObject):
             if self.backend.start() and hasattr(self, "permission_window"):
                 self.permission_window.close()
         self.backend.refresh()
+        if (self.backend.tap and self.backend.test_bundle and
+                "--run-compatibility-test" in sys.argv and not hasattr(self, "compatibility_runner")):
+            self.runCompatibility_(None)
+        if not self.backend.test_bundle:
+            self.updateTick()
+
+    @objc.python_method
+    def updateTick(self):
+        if self.settings.check_updates and self.update_service.due():
+            self.update_service.check()
+        result = self.update_service.poll()
+        if result:
+            self.update_item.setEnabled_(True)
+            if result.update:
+                self.available_update = result.update
+                self.update_item.setTitle_(t("Новая версия: ", "New version: ") + result.update.version + "…")
+                if result.manual:
+                    self.showUpdatePrompt_(None)
+                elif self.settings.check_updates and result.update.version not in self.seen_updates:
+                    self.pending_update = result.update
+            else:
+                if result.status == "ok":
+                    self.available_update = None
+                    self.pending_update = None
+                if not self.available_update:
+                    self.update_item.setTitle_(t("Проверить обновления…", "Check for Updates…"))
+                if result.manual:
+                    self.updateMessage(result.status == "ok")
+        if (self.pending_update and self.backend.focus.state != "secure" and not K.NSApp.modalWindow()
+                and Q.CGEventSourceSecondsSinceLastEventType(Q.kCGEventSourceStateCombinedSessionState, Q.kCGEventKeyDown) >= 3):
+            self.showUpdatePrompt_(None)
+
+    @objc.python_method
+    def updateMessage(self, success):
+        alert = K.NSAlert.alloc().init()
+        alert.setMessageText_(t("Новых версий пока нет", "No newer version available") if success
+                              else t("Не удалось проверить обновления", "Could not check for updates"))
+        alert.setInformativeText_(t("Lado продолжает работать. Можно проверить позже.", "Lado continues to work. You can check again later."))
+        alert.addButtonWithTitle_("OK")
+        K.NSApp.activateIgnoringOtherApps_(True)
+        alert.runModal()
+
+    def checkUpdates_(self, _):
+        if self.available_update:
+            self.showUpdatePrompt_(None)
+        elif self.update_service.check(manual=True):
+            self.update_item.setTitle_(t("Проверяем обновления…", "Checking for updates…"))
+            self.update_item.setEnabled_(False)
+
+    def showUpdatePrompt_(self, _):
+        update = self.pending_update or self.available_update
+        if not update or self.backend.focus.state == "secure":
+            return
+        self.pending_update = None
+        self.seen_updates.add(update.version)
+        alert = K.NSAlert.alloc().init()
+        alert.setMessageText_(t("Новая версия Lado: ", "New Lado version: ") + update.version)
+        alert.setInformativeText_(t(
+            "Обновить? Кнопка откроет загрузку DMG в браузере. После загрузки перетащите Lado в «Программы».",
+            "Update now? The button opens the DMG download in your browser. After downloading, drag Lado to Applications."))
+        alert.addButtonWithTitle_(t("Обновить", "Update"))
+        alert.addButtonWithTitle_(t("Позже", "Later"))
+        K.NSApp.activateIgnoringOtherApps_(True)
+        if alert.runModal() == K.NSAlertFirstButtonReturn and trusted_download(update.url, update.filename):
+            self.openURL(update.url)
 
     def updateStatus_(self, focus):
         if not hasattr(self, "item"):
@@ -136,21 +232,15 @@ class LadoDelegate(N.NSObject):
         else:
             code = "—"
         b = self.item.button()
-        b.setTitle_(" " + code)
-        b.setFont_(K.NSFont.monospacedSystemFontOfSize_weight_(12, K.NSFontWeightSemibold))
-        symbol = None if active else ("lock.fill" if focus.state == "secure" else "pause.circle")
-        image = (K.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, "Lado")
-                 if symbol else K.NSImage.alloc().initWithContentsOfFile_(resource("menu.png")))
-        if image:
-            image.setSize_((15, 15))
-            image.setTemplate_(True)
-            b.setImage_(image)
-            b.setImagePosition_(K.NSImageLeft)
+        b.setTitle_("")
+        b.setImage_(status_image(code, focus.state == "secure"))
+        b.setImagePosition_(K.NSImageOnly)
         b.setAppearsDisabled_(not active)
         message = t(*STATES.get(focus.state, STATES["unsupported"]))
         if focus.state == "active" and not self.settings.automatic:
             message = t("Ручной режим · двойной Shift", "Manual mode · double Shift")
         b.setToolTip_("Lado · " + message)
+        b.setAccessibilityLabel_("Lado · " + code + " · " + message)
         self.state_item.setTitle_(message)
         self.auto_item.setState_(K.NSControlStateValueOn if self.settings.automatic else K.NSControlStateValueOff)
         self.pause_item.setTitle_(t("Продолжить", "Resume") if self.backend.disabled else t("Пауза", "Pause"))
@@ -204,7 +294,7 @@ class LadoDelegate(N.NSObject):
             v.addSubview_(label(t(
                 "Для двойного Shift и исправления раскладки разрешите Lado доступ в разделе «Универсальный доступ». macOS также может запросить «Мониторинг ввода». Затем вернитесь к набору — Lado проверит доступ автоматически.",
                 "Allow Lado in Accessibility to enable double Shift and layout correction. macOS may also request Input Monitoring. Return to typing afterwards — Lado checks permissions automatically."), ((28, 118), (444, 102))))
-            v.addSubview_(label(t("Без сети. Без истории ввода. Без подписки.", "No network. No typing history. No subscription."), ((28, 78), (444, 30)), 12, K.NSColor.secondaryLabelColor()))
+            v.addSubview_(label(t("Локальный ввод. Без истории. Без подписки.", "Local typing. No typing history. No subscription."), ((28, 78), (444, 30)), 12, K.NSColor.secondaryLabelColor()))
             v.addSubview_(button(t("Открыть настройки macOS", "Open macOS Settings"), ((232, 24), (240, 34)), self, "permissions:"))
             v.addSubview_(button(t("Настройки Lado…", "Lado Settings…"), ((26, 24), (180, 34)), self, "showPreferences:"))
             self.permission_window = w
@@ -274,10 +364,12 @@ class LadoDelegate(N.NSObject):
         self.interval.addItemsWithTitles_(["300 ms", "400 ms", "500 ms", "600 ms"])
         self.interval.selectItemAtIndex_(min(range(4), key=lambda i: abs([300,400,500,600][i] - self.settings.double_shift_ms)))
         general.addSubview_(self.interval)
-        self.login_box = self.checkbox(t("Запускать при входе в систему", "Start at login"), ((18, 91), (530, 26)), self.loginPath().exists())
+        self.login_box = self.checkbox(t("Запускать при входе в систему", "Start at login"), ((18, 100), (530, 26)), self.loginPath().exists())
         self.login_box.setEnabled_(bool(getattr(sys, "frozen", False)))
         general.addSubview_(self.login_box)
-        general.addSubview_(label(t("Двойной Shift: выделенный текст или последнее слово. ЗАГЛАВНЫЕ слова автоматика пропускает.", "Double Shift: selected text or the last word. Automatic correction skips ALL-CAPS words."), ((18, 21), (530, 55)), 12, K.NSColor.secondaryLabelColor()))
+        self.updates_box = self.checkbox(t("Проверять новые версии на GitHub", "Check GitHub for new versions"), ((18, 65), (530, 26)), self.settings.check_updates)
+        general.addSubview_(self.updates_box)
+        general.addSubview_(label(t("Двойной Shift: выделенный текст или последнее слово. ЗАГЛАВНЫЕ слова автоматика пропускает.", "Double Shift: selected text or the last word. Automatic correction skips ALL-CAPS words."), ((18, 10), (530, 43)), 12, K.NSColor.secondaryLabelColor()))
         exceptions.addSubview_(label(t("Личные слова", "Personal words"), ((18, 308), (254, 24)), bold=True))
         exceptions.addSubview_(label(t("Приложения", "Applications"), ((298, 308), (254, 24)), bold=True))
         self.words_editor = self.textEditor(exceptions, ((18, 88), (254, 214)), "\n".join(self.settings.exceptions))
@@ -302,9 +394,9 @@ class LadoDelegate(N.NSObject):
         exceptions.addSubview_(label(t("По одному на строку. Исключения не мешают ручному двойному Shift.", "One entry per line. Word exceptions do not block manual double Shift."), ((18, 7), (530, 36)), 12, K.NSColor.secondaryLabelColor()))
         privacy.addSubview_(label(t("Ваш текст не покидает Mac", "Your text stays on your Mac"), ((20, 291), (525, 35)), 21, bold=True))
         privacy.addSubview_(label(t(
-            "• Нет сетевых запросов, аналитики и истории ввода.\n\n• В памяти — до трёх завершённых слов и текущего слова. Контекст очищается при смене поля, паузе и после 30 секунд бездействия.\n\n• Выделение читается по двойному Shift; при исправлении сверяется только короткий наблюдавшийся фрагмент. Последняя операция хранится в памяти до 30 секунд.\n\n• В защищённых полях обработка отключается, контекст очищается, значок показывает замок.\n\n• На диск сохраняются только настройки и ваши явные исключения.",
-            "• No network requests, analytics or typing history.\n\n• Memory holds up to three completed words and the current word. Context clears on focus change, pause and after 30 idle seconds.\n\n• User selections are read on double Shift; word correction checks only the short observed span. The last operation stays in memory for up to 30 seconds.\n\n• Protected fields disable processing, clear context and show a lock icon.\n\n• Only preferences and your explicit exceptions are saved to disk."), ((20, 20), (530, 265)), 13))
-        v.addSubview_(label(t("Локально. Без истории ввода.", "Offline. No typing history."), ((24, 26), (360, 28)), 12, K.NSColor.secondaryLabelColor()))
+            "• Текст не передаётся. Нет аналитики и истории ввода.\n\n• В памяти — до трёх завершённых слов и текущего слова. Контекст очищается при смене поля, паузе и после 30 секунд бездействия.\n\n• Выделение читается по двойному Shift; при исправлении сверяется только короткий наблюдавшийся фрагмент. Последняя операция хранится в памяти до 30 секунд.\n\n• В защищённых полях обработка отключается, контекст очищается, значок показывает замок.\n\n• На диск сохраняются только настройки и ваши явные исключения. Проверка обновлений запрашивает лишь публичные релизы GitHub и отключается в настройках.",
+            "• Typed text is never transmitted. No analytics or typing history.\n\n• Memory holds up to three completed words and the current word. Context clears on focus change, pause and after 30 idle seconds.\n\n• User selections are read on double Shift; word correction checks only the short observed span. The last operation stays in memory for up to 30 seconds.\n\n• Protected fields disable processing, clear context and show a lock icon.\n\n• Only preferences and explicit exceptions are saved. Optional update checks request only public GitHub release metadata; disable them in Settings."), ((20, 20), (530, 265)), 13))
+        v.addSubview_(label(t("Ввод локально. Без истории ввода.", "Local typing. No typing history."), ((24, 26), (360, 28)), 12, K.NSColor.secondaryLabelColor()))
         v.addSubview_(button(t("Сохранить", "Save"), ((493, 22), (122, 34)), self, "savePreferences:"))
         self.preferences = w
         self.show(w)
@@ -328,6 +420,9 @@ class LadoDelegate(N.NSObject):
 
     def savePreferences_(self, _):
         self.settings.automatic = bool(self.auto_box.state())
+        self.settings.check_updates = bool(self.updates_box.state())
+        if not self.settings.check_updates:
+            self.pending_update = None
         self.settings.case_sensitive = bool(self.case_box.state())
         self.settings.double_shift_ms = [300,400,500,600][self.interval.indexOfSelectedItem()]
         self.settings.exceptions = list(dict.fromkeys(x.strip()[:256] for x in str(self.words_editor.string()).splitlines() if x.strip()))[:5000]
@@ -401,7 +496,7 @@ class LadoDelegate(N.NSObject):
             v.addSubview_(title)
             for text, y, size in [(t("Версия ", "Version ") + __version__ + " · macOS preview", 221, 12),
                                   (t("Ваши слова остаются у вас.", "Your words stay with you."), 176, 17),
-                                  (t("Без сети. Без истории ввода.", "Offline. No typing history."), 142, 12),
+                                  (t("Ввод локально. Без истории ввода.", "Local typing. No typing history."), 142, 12),
                                   (t("Создано @sirdimitry", "Created by @sirdimitry"), 103, 13)]:
                 item = label(text, ((20, y), (400, 28)), size)
                 item.setAlignment_(K.NSTextAlignmentCenter)
@@ -421,6 +516,13 @@ class LadoDelegate(N.NSObject):
         window = K.NSApp.keyWindow()
         if window:
             window.close()
+
+    def runCompatibility_(self, _):
+        if self.backend.test_bundle != "com.sirdimitry.lado-testpad":
+            return
+        from .compatibility import CompatibilityRunner
+        self.compatibility_runner = CompatibilityRunner(self)
+        self.compatibility_runner.begin()
 
     def quit_(self, _):
         self.backend.stop()

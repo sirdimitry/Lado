@@ -30,7 +30,7 @@ class PrivacyTests(unittest.TestCase):
             self.assertEqual(s.exceptions, ["word"])
             self.assertFalse(hasattr(s, "history"))
 
-    def test_no_network_or_logging_imports_in_runtime(self):
+    def test_network_is_isolated_from_typing_and_logging_is_absent(self):
         root = Path(__file__).parents[1] / "src/lado"
         prohibited = {"socket", "requests", "http", "urllib", "httpx", "aiohttp", "logging", "sentry_sdk", "subprocess"}
         for path in root.rglob("*.py"):
@@ -38,6 +38,8 @@ class PrivacyTests(unittest.TestCase):
             for node in ast.walk(tree):
                 names = [x.name for x in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) else []
                 for name in names:
+                    if path.name == "updates.py" and name.split(".")[0] in {"urllib", "http"}:
+                        continue  # The sole network boundary: fixed public release metadata.
                     self.assertNotIn(name.split(".")[0], prohibited, str(path))
 
     def test_corrupt_settings_fall_back(self):

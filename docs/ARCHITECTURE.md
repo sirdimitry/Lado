@@ -43,3 +43,19 @@ Selection support and rich-text behavior depend on the host editor. Ordinary
 typing is only processed in supported accessibility text elements. Cursor movement
 performed through app-specific commands may not always be observable; app-level
 integration tests are required. This preview is intentionally conservative.
+
+## Optional update checker
+
+`updates.py` is the only network boundary. It accepts the constant app version and
+processor architecture, never text buffers or personal exceptions. One background
+worker requests a fixed public GitHub release endpoint with a timeout, response-size
+limit and in-memory ETag caching. Checks run at startup and hourly when enabled.
+Downloads must be HTTPS assets of sirdimitry/Lado, match the release version and
+processor, and are opened in the default browser only after Update is chosen.
+
+## Isolated live checks
+
+With `--compatibility-test --run-compatibility-test`, the app runs synthetic physical
+key events only in the exact project-owned LadoTestPad.app. It aborts on a focus
+change, restores temporary settings, writes PASS/FAIL metadata without text, and
+closes both apps. Update checking is disabled in this mode.

@@ -3,8 +3,15 @@
 ## Русский
 
 **Lado не отправляет набранный текст, не ведёт историю ввода и не сохраняет
-набранный текст на диск.** Нет сетевого клиента, аналитики, аккаунта, автоматической
-проверки обновлений и загрузки моделей. Приложение работает без интернета.
+набранный текст на диск.** Распознавание и преобразование работают без интернета.
+Нет аналитики, аккаунта и загрузки моделей.
+
+По запросу пользователя добавлена необязательная проверка обновлений GitHub:
+при запуске и раз в час запрашивается только фиксированный публичный список релизов
+`sirdimitry/Lado`. В запрос не включаются набранный текст, исключения, документы,
+аккаунт или идентификатор устройства. GitHub получает обычные данные соединения,
+например IP-адрес. Автопроверку можно отключить в настройках; ручная проверка в меню
+выполняет запрос только по нажатию. Таймаут и ошибка сети не мешают набору.
 
 Чтобы преобразовать слово, программе необходим кратковременный контекст в памяти:
 
@@ -47,7 +54,9 @@
 
 Lado не использует буфер обмена и не пишет ввод в журналы или отчёты об ошибках.
 Открытие авторских ссылок происходит только по нажатию и передаёт URL системному
-браузеру. Это не отправка текста со стороны Lado.
+браузеру. Это не отправка текста со стороны Lado. По кнопке «Обновить» аналогично
+открывается проверенная ссылка на GitHub DMG для установленного процессора;
+приложение не устанавливает новую версию скрытно.
 
 «Не сохраняет» означает отсутствие записи в коде приложения. Python не гарантирует
 криптографическое затирание строк RAM; системная подкачка и системные дампы находятся
@@ -57,8 +66,16 @@ Lado не использует буфер обмена и не пишет вво
 ## English
 
 **Lado never transmits typed text, records a typing history, or deliberately
-writes typed text to disk.** There is no network client, telemetry, account,
-automatic update check, or model download. Normal operation is entirely offline.
+writes typed text to disk.** Text processing works offline, without telemetry,
+an account or model downloads.
+
+Optional update checks request only the fixed public GitHub release endpoint for
+`sirdimitry/Lado`, at startup and hourly. Requests contain no typing, personal
+exceptions, documents, account or device identifiers. GitHub sees ordinary connection
+metadata such as an IP address. Disable automatic checks in Settings; a manual
+check makes a request only when chosen. Network failure does not block typing.
+Choosing Update opens a validated matching GitHub DMG in the default browser;
+installation uses the usual drag to Applications, with no silent app replacement.
 
 The bounded RAM context contains up to three completed words and one current word
 (128 characters each), plus a single temporary reversible edit. It is cleared on
@@ -87,6 +104,15 @@ links open in the default browser only when clicked; no typed text is passed.
 Python cannot guarantee secure RAM erasure; OS swap/crash dumps are outside the
 application's control. Explicit exceptions are intentionally saved, so never add
 passwords to that list.
+
+## Opt-in development checks
+
+The isolated compatibility runner is disabled in normal operation. When explicitly
+started with compatibility flags, it sends public synthetic examples only to the
+exact project-owned test pad and writes PASS/FAIL case names plus non-text diagnostic
+metadata to `build/compatibility-results.json` (mode `0600`). It never reads secure
+field contents, never contacts GitHub, restores temporary settings and closes both
+test apps. This report contains no typed text and is not a typing history.
 
 ## Security reports
 

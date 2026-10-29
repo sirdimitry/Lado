@@ -35,7 +35,7 @@ def main():
         "macOS may also request Input Monitoring.\n\n"
         "Перетащите Lado.app в Программы и запустите установленную копию.\n"
         "Разрешите Lado доступ: Системные настройки → Конфиденциальность и безопасность → Универсальный доступ.\n\n"
-        "Offline. No typing history. / Локально. Без истории ввода.\n"
+        "Local typing. No typing history. / Ввод локально. Без истории ввода.\n"
         "Preview: ad-hoc signed, not Apple-notarized. / Предварительная сборка без заверения Apple.\n"
         "https://github.com/sirdimitry/Lado\n", encoding="utf-8")
     dmg = ROOT / f"dist/Lado-{version}-macOS-arm64.dmg"

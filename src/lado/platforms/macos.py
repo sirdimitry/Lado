@@ -162,8 +162,9 @@ class Focus:
 
 
 class MacBackend:
-    def __init__(self, settings, notify, defer):
+    def __init__(self, settings, notify, defer, test_bundle=None):
         self.settings, self.notify, self.defer = settings, notify, defer
+        self.test_bundle = test_bundle
         self.sources = InputSources()
         installed = self.sources.all()
         ids = {s["id"] for s in installed}
@@ -183,6 +184,7 @@ class MacBackend:
         self.epoch = 0
         self.last_state = None
         self.disabled = False
+        self.last_error = None
         self.system = A.AXUIElementCreateSystemWide()
         A.AXUIElementSetMessagingTimeout(self.system, 0.035)
 
@@ -213,6 +215,8 @@ class MacBackend:
         if app is None:
             return Focus("unsupported", layout=sid)
         pid, bundle = app.processIdentifier(), app.bundleIdentifier() or ""
+        if self.test_bundle and bundle != self.test_bundle:
+            return Focus("excluded", pid, bundle, layout=sid)
         if pid == os.getpid() or bundle in self.settings.excluded_apps:
             return Focus("excluded", pid, bundle, layout=sid)
         if not self.valid_pair or sid not in (self.settings.english_source, self.settings.russian_source):
@@ -378,10 +382,11 @@ class MacBackend:
     def callback(self, proxy, event_type, event, _):
         try:
             return self._handle(proxy, event_type, event)
-        except Exception:
+        except Exception as error:
             # Fail closed; never print exceptions with event/selection contents.
             self.clear()
             self.disabled = True
+            self.last_error = type(error).__name__
             self.defer(lambda: self.notify(Focus("error")), 0)
             return event
 

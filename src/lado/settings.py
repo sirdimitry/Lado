@@ -8,6 +8,7 @@ from pathlib import Path
 @dataclass
 class Settings:
     automatic: bool = True
+    check_updates: bool = True
     double_shift_ms: int = 400
     english_source: str = "com.apple.keylayout.ABC"
     russian_source: str = "com.apple.keylayout.Russian"
