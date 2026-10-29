@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lado"
-version = "0.1.1-rc.1"
+version = "0.1.1-rc.2"
 description = "A small, offline RU/EN keyboard layout companion"
 readme = "README.md"
 requires-python = ">=3.11"

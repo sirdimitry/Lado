@@ -133,10 +133,16 @@ class InputSources:
         return bool(self.carbon.IsSecureEventInputEnabled())
 
 
+class AccessibilityAccessError(RuntimeError):
+    pass
+
+
 def attr(element, name):
     if element is None:
         return None
     err, value = A.AXUIElementCopyAttributeValue(element, name, None)
+    if err == A.kAXErrorAPIDisabled:
+        raise AccessibilityAccessError()
     return value if err == 0 else None
 
 
@@ -160,6 +166,8 @@ class Focus:
     bundle: str = ""
     element: object = None
     layout: str = ""
+    role: str = ""
+    reason: str = ""
 
 
 class MacBackend:
@@ -179,6 +187,7 @@ class MacBackend:
         self.buffer = Buffer(self.detector)
         self.gesture = DoubleShift(settings.double_shift_ms / 1000)
         self.focus = Focus("permission")
+        self.last_pointer_focus = None
         self.tap = None
         self.tap_source = None
         self.selection_undo = None
@@ -213,13 +222,21 @@ class MacBackend:
         self.epoch += 1
 
     def check_focus(self):
+        try:
+            return self._check_focus()
+        except AccessibilityAccessError:
+            return Focus("permission", reason="accessibility-denied")
+
+    def _check_focus(self):
         if self.faulted:
             return Focus("error")
         sid = self.sources.current()
         if self.sources.secure():
             return Focus("secure", layout=sid)
-        if not A.AXIsProcessTrusted() or not Q.CGPreflightListenEventAccess():
-            return Focus("permission", layout=sid)
+        if not A.AXIsProcessTrusted():
+            return Focus("permission", layout=sid, reason="accessibility-permission")
+        if not Q.CGPreflightListenEventAccess():
+            return Focus("permission", layout=sid, reason="input-monitoring-permission")
         if self.disabled:
             return Focus("paused", layout=sid)
         app = K.NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -235,20 +252,51 @@ class MacBackend:
         app_ax = A.AXUIElementCreateApplication(pid)
         A.AXUIElementSetMessagingTimeout(app_ax, 0.035)
         element = attr(app_ax, "AXFocusedUIElement")
-        if element is None:
-            return Focus("unsupported", pid, bundle, layout=sid)
-        A.AXUIElementSetMessagingTimeout(element, 0.035)
-        subrole = str(attr(element, "AXSubrole") or "")
-        protected = attr(element, "AXProtectedContent")
-        if subrole == "AXSecureTextField" or protected:
-            return Focus("secure", pid, bundle, layout=sid)
-        role = str(attr(element, "AXRole") or "")
-        if role not in ("AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"):
-            return Focus("unsupported", pid, bundle, layout=sid)
-        # No contents are read here. A selection range establishes editable text support.
-        if selected_range(element) is None:
-            return Focus("unsupported", pid, bundle, layout=sid)
-        return Focus("active", pid, bundle, element, sid)
+        focus = self.resolve_focus(element, pid, bundle, sid)
+        if focus.state in ("active", "secure"):
+            return focus
+        # Some embedded editors expose the true focused node only through the
+        # system-wide focus reference. Verify ownership before inspecting it.
+        fallback = attr(self.system, "AXFocusedUIElement")
+        if fallback is not None and fallback != element:
+            err, owner = A.AXUIElementGetPid(fallback, None)
+            if err == 0 and owner == pid:
+                resolved = self.resolve_focus(fallback, pid, bundle, sid)
+                if resolved.state in ("active", "secure"):
+                    return resolved
+                if not focus.role:
+                    focus = resolved
+        return focus
+
+    def resolve_focus(self, element, pid, bundle, sid):
+        seen = []
+        role = ""
+        for _ in range(4):
+            if element is None:
+                return Focus("unsupported", pid, bundle, layout=sid,
+                             role=role, reason="no-focused-element")
+            if any(element == previous for previous in seen):
+                break
+            seen.append(element)
+            A.AXUIElementSetMessagingTimeout(element, 0.035)
+            subrole = str(attr(element, "AXSubrole") or "")
+            protected = attr(element, "AXProtectedContent")
+            if subrole == "AXSecureTextField" or protected:
+                return Focus("secure", pid, bundle, layout=sid, reason="protected-field")
+            role = str(attr(element, "AXRole") or "")
+            if role in ("AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"):
+                # Metadata only: never read the value or walk document children.
+                if selected_range(element) is None:
+                    return Focus("unsupported", pid, bundle, layout=sid,
+                                 role=role, reason="selection-range-unavailable")
+                return Focus("active", pid, bundle, element, sid, role, "ready")
+            nested = attr(element, "AXFocusedUIElement")
+            if nested is None:
+                return Focus("unsupported", pid, bundle, layout=sid,
+                             role=role, reason="not-editable-focus")
+            element = nested
+        return Focus("unsupported", pid, bundle, layout=sid,
+                     role=role, reason="focus-chain-limit")
 
     def refresh(self):
         focus = self.check_focus()
@@ -262,7 +310,7 @@ class MacBackend:
             self.clear()
         if self.selection_undo and monotonic() > self.selection_undo["expires"]:
             self.selection_undo = None
-        state = (focus.state, focus.layout, self.settings.automatic, bool(self.tap))
+        state = (focus.state, focus.layout, focus.role, focus.reason, self.settings.automatic, bool(self.tap))
         if state != self.last_state:
             self.last_state = state
             self.notify(focus)
@@ -413,6 +461,9 @@ class MacBackend:
             return event
         self.input_serial += 1
         if event_type in (Q.kCGEventLeftMouseDown, Q.kCGEventRightMouseDown, Q.kCGEventOtherMouseDown):
+            f = self.focus
+            self.last_pointer_focus = Focus(f.state, f.pid, f.bundle, layout=f.layout,
+                                            role=f.role, reason=f.reason)
             self.clear()
             return event
         # No AX, permission IPC, layout change, editing, or Unicode reads here.

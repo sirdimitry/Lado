@@ -108,7 +108,9 @@ class LadoDelegate(N.NSObject):
             item.setTarget_(self)
             app_menu.insertItem_atIndex_(item, 0)
         self.item = K.NSStatusBar.systemStatusBar().statusItemWithLength_(K.NSVariableStatusItemLength)
+        self.menu_focus = None
         self.menu = K.NSMenu.alloc().init()
+        self.menu.setDelegate_(self)
         self.state_item = self.addItem("Lado", None)
         self.state_item.setEnabled_(False)
         self.menu.addItem_(K.NSMenuItem.separatorItem())
@@ -120,6 +122,7 @@ class LadoDelegate(N.NSObject):
         self.permission_item = self.addItem(t("Разрешения macOS…", "macOS permissions…"), "permissions:")
         self.addItem(t("Настройки…", "Settings…"), "showPreferences:")
         self.addItem(t("О Lado…", "About Lado…"), "showAbout:")
+        self.addItem(t("Диагностика ввода…", "Input Status…"), "showInputStatus:")
         self.menu.addItem_(K.NSMenuItem.separatorItem())
         self.addItem(t("Выйти", "Quit"), "quit:", "q")
         self.item.setMenu_(self.menu)
@@ -222,6 +225,8 @@ class LadoDelegate(N.NSObject):
             self.openURL(update.url)
 
     def updateStatus_(self, focus):
+        if self.menu_focus is not None:
+            focus = self.menu_focus
         if not hasattr(self, "item"):
             return
         active = focus.state == "active" and bool(self.backend.tap)
@@ -246,6 +251,41 @@ class LadoDelegate(N.NSObject):
         self.pause_item.setTitle_(t("Продолжить", "Resume") if self.backend.disabled else t("Пауза", "Pause"))
         self.pause_item.setEnabled_(not self.backend.faulted)
         self.exclude_item.setEnabled_(bool(focus.bundle and focus.bundle != "com.sirdimitry.lado"))
+
+    def menuWillOpen_(self, _):
+        self.menu_focus = self.backend.last_pointer_focus or self.backend.focus
+        self.diagnostic_focus = self.menu_focus
+        self.updateStatus_(self.menu_focus)
+
+    def menuDidClose_(self, _):
+        self.menu_focus = None
+        self.updateStatus_(self.backend.focus)
+
+    def showInputStatus_(self, _):
+        # Cached metadata from BEFORE opening the menu; no text/selection read.
+        f = getattr(self, "diagnostic_focus", None) or self.backend.last_pointer_focus or self.backend.focus
+        details = "\n".join([
+            "Lado " + __version__,
+            t("Состояние: ", "State: ") + t(*STATES.get(f.state, STATES["unsupported"])),
+            t("Приложение: ", "Application: ") + (f.bundle or "—"),
+            t("Тип поля: ", "Field type: ") + (f.role or "—"),
+            t("Причина: ", "Reason: ") + (f.reason or f.state),
+            "Accessibility: " + str(bool(A.AXIsProcessTrusted())),
+            t("Мониторинг ввода: ", "Input Monitoring: ") + str(bool(Q.CGPreflightListenEventAccess())),
+            t("Наблюдатель подключён: ", "Observer connected: ") + str(bool(self.backend.tap)),
+            t("Наблюдатель включён: ", "Observer enabled: ") + str(bool(self.backend.tap and Q.CGEventTapIsEnabled(self.backend.tap))),
+            t("Режим: только наблюдение", "Mode: listen-only"),
+            "",
+            t("Диагностика не содержит набранный текст или содержимое выделения.",
+              "This status contains no typed text or selection contents."),
+        ])
+        if not hasattr(self, "input_status_window"):
+            self.input_status_window = self.window(t("Диагностика ввода", "Input Status"), 560, 390)
+            self.input_status_label = label(details, ((22, 20), (516, 350)), 13)
+            self.input_status_window.contentView().addSubview_(self.input_status_label)
+        else:
+            self.input_status_label.setStringValue_(details)
+        self.show(self.input_status_window)
 
     def toggleAuto_(self, _):
         self.settings.automatic = not self.settings.automatic
