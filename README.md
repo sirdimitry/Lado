@@ -57,6 +57,7 @@ follows the dominant script. A selection does not change the active layout.
 1. Download the **macOS arm64 DMG** from [Releases](https://github.com/sirdimitry/Lado/releases).
 2. Drag **Lado.app** to **Applications**, then launch that copy.
 3. Allow **Lado** in **System Settings → Privacy & Security → Accessibility**.
+   On newer macOS this permission appears under **Device Control and Data Access**.
    macOS may additionally request **Input Monitoring**. Permissions belong to the
    installed app; source-code runs have a different identity.
 4. Enable an English and a Russian keyboard layout in macOS, then choose your
@@ -64,7 +65,9 @@ follows the dominant script. A selection does not change the active layout.
 
 The preview DMG is **ad-hoc signed, not Apple-notarized**. macOS may require you to
 approve opening it in Privacy & Security. No administrator/root access is needed
-for normal use. Intel builds and Windows installers are not provided yet.
+for normal use. After an ad-hoc update, macOS may require removing the stale Lado
+permission entry and re-adding the exact installed app; an enabled old row may not
+authorize new code. Intel builds and Windows installers are not provided yet.
 
 Default exclusions include Terminal, iTerm, VS Code, Xcode and common 1Password
 bundle IDs. Review this list in Settings. Password managers with other bundle IDs
