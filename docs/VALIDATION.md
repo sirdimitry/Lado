@@ -4,8 +4,9 @@ The published 0.1.0 DMG was followed by a reported system freeze. Its historical
 checks below are insufficient evidence of system resilience. The revised source
 passes **97 isolated automated checks**, including the formerly failing input
 safety gates, passive/deferred pipeline, stale/focus/permission failure paths and
-duplicate-instance lock. It has NOT been live-tested in the user's ChatGPT editor after this
-revision. See [the safety audit](validation/safety-audit-2026-10-29.md).
+duplicate-instance lock. The unchanged installed rc.2 now passes 19 isolated native checks.
+The user's ChatGPT field still fails with `no-focused-element` despite granted
+permissions; compatibility there is unresolved. See [the safety audit](validation/safety-audit-2026-10-29.md).
 
 Local candidate **0.1.1-rc.2** is now installed in `/Applications/Lado.app`, with signature,
 DMG integrity, bundled-source and mounted-content checks passing. It was not
