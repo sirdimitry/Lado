@@ -244,6 +244,7 @@ class LadoDelegate(N.NSObject):
         self.state_item.setTitle_(message)
         self.auto_item.setState_(K.NSControlStateValueOn if self.settings.automatic else K.NSControlStateValueOff)
         self.pause_item.setTitle_(t("Продолжить", "Resume") if self.backend.disabled else t("Пауза", "Pause"))
+        self.pause_item.setEnabled_(not self.backend.faulted)
         self.exclude_item.setEnabled_(bool(focus.bundle and focus.bundle != "com.sirdimitry.lado"))
 
     def toggleAuto_(self, _):
@@ -302,6 +303,7 @@ class LadoDelegate(N.NSObject):
 
     def permissions_(self, _):
         A.AXIsProcessTrustedWithOptions({A.kAXTrustedCheckOptionPrompt: True})
+        Q.CGRequestListenEventAccess()
         self.openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 
     @objc.python_method
@@ -530,12 +532,16 @@ class LadoDelegate(N.NSObject):
 
 
 def run():
-    app = K.NSApplication.sharedApplication()
-    app.setActivationPolicy_(K.NSApplicationActivationPolicyAccessory)
-    if getattr(sys, "frozen", False):
-        others = K.NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.sirdimitry.lado")
-        if any(p.processIdentifier() != os.getpid() for p in others):
-            return
-    delegate = LadoDelegate.alloc().init()
-    app.setDelegate_(delegate)
-    app.run()
+    from .instance import InstanceLock
+    from .settings import settings_path
+    instance = InstanceLock(settings_path().parent / "instance.lock")
+    if not instance.acquire():
+        return
+    try:
+        app = K.NSApplication.sharedApplication()
+        app.setActivationPolicy_(K.NSApplicationActivationPolicyAccessory)
+        delegate = LadoDelegate.alloc().init()
+        app.setDelegate_(delegate)
+        app.run()
+    finally:
+        instance.close()

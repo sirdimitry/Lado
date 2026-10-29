@@ -119,3 +119,20 @@ test apps. This report contains no typed text and is not a typing history.
 For a security issue, contact [@sirdimitry](https://x.com/sirdimitry). Do not post
 passwords, private typed examples or sensitive application screenshots in public
 GitHub issues. Synthetic examples are sufficient to reproduce layout problems.
+
+## Input safety revision (2026-10-29)
+
+The revised adapter uses listen-only observation and never submits keyboard
+events. Up to 16 native event copies are held briefly in RAM; Unicode is decoded
+only after fresh protected-field and focus checks outside the callback. Pending
+events expire after 250 ms or are discarded on overflow/focus changes. Failed
+atomic replacements are skipped, including explicit selections. A zero-content
+`instance.lock` file under the settings directory prevents duplicate processes.
+These source changes still require isolated live validation.
+
+Исправленный адаптер только наблюдает события и не отправляет нажатия. В RAM
+кратковременно остаётся до 16 копий системных событий; символы читаются после
+новой проверки защиты и фокуса вне callback. События старше 250 мс, при
+переполнении или смене фокуса отбрасываются. При отказе атомарной замены
+исправление пропускается, в том числе для выделений. Пустой файл `instance.lock`
+рядом с настройками предотвращает запуск двух копий. Живая проверка ещё нужна.

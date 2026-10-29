@@ -1,5 +1,7 @@
 """Native safety ordering and selection tests; no global permissions needed."""
 import sys
+from collections import deque
+from time import monotonic
 import unittest
 from unittest.mock import Mock, patch
 
@@ -25,6 +27,13 @@ class MacSafetyTests(unittest.TestCase):
         b.selection_undo = None
         b.epoch = 0
         b.disabled = False
+        b.faulted = False
+        b.events = deque(maxlen=16)
+        b.drain_pending = False
+        b.focus_checked = monotonic()
+        b.input_serial = 0
+        b.edit_serial = 0
+        b.edit_deadline = monotonic() + 1
         b.defer = Mock()
         b.notify = Mock()
         b.focus = M.Focus("active", element=object())
@@ -33,7 +42,8 @@ class MacSafetyTests(unittest.TestCase):
     def test_blocked_states_never_read_event_characters(self):
         for state in ("secure", "permission", "paused", "excluded", "layout", "unsupported"):
             b = self.make_backend()
-            b.refresh = Mock(return_value=M.Focus(state))
+            b.focus = M.Focus(state)
+            b.refresh = Mock(return_value=b.focus)
             event = Q.CGEventCreateKeyboardEvent(None, 0, True)
             with patch.object(Q, "CGEventKeyboardGetUnicodeString") as read:
                 self.assertIs(b._handle(None, Q.kCGEventKeyDown, event), event)
@@ -64,7 +74,7 @@ class MacSafetyTests(unittest.TestCase):
         workspace = Mock()
         workspace.frontmostApplication.return_value = foreground
         with patch.object(M.A, "AXIsProcessTrusted", return_value=True), \
-             patch.object(Q, "CGPreflightPostEventAccess", return_value=True), \
+             patch.object(Q, "CGPreflightListenEventAccess", return_value=True), \
              patch.object(M.K, "NSWorkspace", Mock(sharedWorkspace=Mock(return_value=workspace))), \
              patch.object(M, "attr") as read:
             self.assertEqual(b.check_focus().state, "excluded")
@@ -97,14 +107,16 @@ class MacSafetyTests(unittest.TestCase):
         b._type = Mock()
         with patch.object(M, "selected_range", return_value=(0, 6)), \
              patch.object(M, "attr", return_value="ghbdtn"), \
-             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,False)):
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", return_value=0) as write:
             b._selection(None, focus)
-        self.assertEqual(b._type.call_args.args[1], "привет")
+        self.assertEqual(write.call_args.args[2], "привет")
         with patch.object(M, "selected_range", return_value=(0, 6)), \
              patch.object(M, "attr", return_value="привет"), \
-             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,False)):
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", return_value=0) as write:
             b._selection(None, focus)
-        self.assertEqual(b._type.call_args.args[1], "ghbdtn")
+        self.assertEqual(write.call_args.args[2], "ghbdtn")
 
     def test_native_sources_and_layout_data(self):
         sources = M.InputSources()
@@ -118,14 +130,11 @@ class MacSafetyTests(unittest.TestCase):
             self.assertEqual(converter.convert("ghbdtn"), "привет")
             self.assertEqual(converter.convert("GHBDTN"), "ПРИВЕТ")
 
-    def test_unicode_payload_is_on_both_key_events(self):
-        b = self.make_backend()
-        events = list(b._unicode_events("привет😀"))
-        self.assertEqual(len(events), 14)
-        for i, char in enumerate("привет😀"):
-            for event in events[2*i:2*i+2]:
-                self.assertEqual(Q.CGEventKeyboardGetUnicodeString(event,8,None,None)[1], char)
-                self.assertEqual(Q.CGEventGetFlags(event), 0)
+    def test_adapter_contains_no_synthetic_event_submission(self):
+        from pathlib import Path
+        source = Path(M.__file__).read_text()
+        for forbidden in ("CGEventTapPostEvent", "CGEventPost(", "CGEventKeyboardSetUnicodeString"):
+            self.assertNotIn(forbidden, source)
 
     def test_unsupported_replacement_never_deletes(self):
         from lado.engine import Edit

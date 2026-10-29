@@ -1,4 +1,5 @@
 """macOS input adapter. No clipboard, networking, or input logging."""
+from collections import deque
 from dataclasses import dataclass
 import ctypes as C
 import os
@@ -185,6 +186,13 @@ class MacBackend:
         self.last_state = None
         self.disabled = False
         self.last_error = None
+        self.faulted = False
+        self.events = deque(maxlen=16)
+        self.drain_pending = False
+        self.focus_checked = 0.0
+        self.input_serial = 0
+        self.edit_serial = 0
+        self.edit_deadline = 0.0
         self.system = A.AXUIElementCreateSystemWide()
         A.AXUIElementSetMessagingTimeout(self.system, 0.035)
 
@@ -198,16 +206,19 @@ class MacBackend:
         self.clear()
 
     def clear(self):
+        self.events.clear()
         self.buffer.clear()
         self.gesture.clear()
         self.selection_undo = None
         self.epoch += 1
 
     def check_focus(self):
+        if self.faulted:
+            return Focus("error")
         sid = self.sources.current()
         if self.sources.secure():
             return Focus("secure", layout=sid)
-        if not A.AXIsProcessTrusted() or not Q.CGPreflightPostEventAccess():
+        if not A.AXIsProcessTrusted() or not Q.CGPreflightListenEventAccess():
             return Focus("permission", layout=sid)
         if self.disabled:
             return Focus("paused", layout=sid)
@@ -241,6 +252,7 @@ class MacBackend:
 
     def refresh(self):
         focus = self.check_focus()
+        self.focus_checked = monotonic()
         old = self.focus
         if (focus.state != "active" or focus.pid != old.pid or focus.element != old.element
                 or focus.layout != old.layout):
@@ -257,6 +269,8 @@ class MacBackend:
         return focus
 
     def start(self):
+        if self.faulted:
+            return False
         if self.tap or not A.AXIsProcessTrusted():
             self.refresh()
             return bool(self.tap)
@@ -264,7 +278,7 @@ class MacBackend:
             Q.kCGEventLeftMouseDown, Q.kCGEventRightMouseDown, Q.kCGEventOtherMouseDown))
         self._callback = self.callback
         self.tap = Q.CGEventTapCreate(Q.kCGSessionEventTap, Q.kCGHeadInsertEventTap,
-            Q.kCGEventTapOptionDefault, mask, self._callback, None)
+            Q.kCGEventTapOptionListenOnly, mask, self._callback, None)
         if self.tap:
             self.tap_source = F.CFMachPortCreateRunLoopSource(None, self.tap, 0)
             F.CFRunLoopAddSource(F.CFRunLoopGetMain(), self.tap_source, F.kCFRunLoopCommonModes)
@@ -273,29 +287,22 @@ class MacBackend:
         return bool(self.tap)
 
     def stop(self):
+        if self.tap_source:
+            F.CFRunLoopRemoveSource(F.CFRunLoopGetMain(), self.tap_source, F.kCFRunLoopCommonModes)
+            self.tap_source = None
         if self.tap:
             Q.CGEventTapEnable(self.tap, False)
             F.CFMachPortInvalidate(self.tap)
             self.tap = None
         self.clear()
 
-    def _post(self, proxy, event):
-        Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)
-        Q.CGEventTapPostEvent(proxy, event)
-
-    def _unicode_events(self, text):
-        # A scalar per event is accepted by more text input clients than a string
-        # payload. Both halves of the key cycle carry the same Unicode override.
-        for char in text:
-            for down in (True, False):
-                event = Q.CGEventCreateKeyboardEvent(None, 0, down)
-                Q.CGEventSetFlags(event, 0)
-                Q.CGEventKeyboardSetUnicodeString(event, len(char.encode("utf-16-le")) // 2, char)
-                yield event
-
-    def _type(self, proxy, text):
-        for event in self._unicode_events(text):
-            self._post(proxy, event)
+    def _fault(self, reason):
+        # Latch until process restart; the UI timer must never re-arm a failed tap.
+        self.faulted = True
+        self.disabled = True
+        self.last_error = reason
+        self.stop()
+        self.defer(lambda: self.notify(Focus("error")), 0)
 
     def _switch(self, target):
         if target in ("en", "ru"):
@@ -304,8 +311,12 @@ class MacBackend:
             # This source change belongs to our own edit and does not invalidate its undo.
             self.focus.layout = self.sources.current()
 
+    def _can_edit(self):
+        return (not self.disabled and not self.faulted and not self.sources.secure()
+                and self.edit_serial == self.input_serial and monotonic() <= self.edit_deadline)
+
     def _replace_tail(self, proxy, edit, pending_separator=""):
-        if not edit or self.sources.secure():
+        if not edit or not self._can_edit():
             return False
         # Prefer a bounded, validated AX replacement. Never erase a word with a
         # burst of Backspace events and then hope a Unicode insertion succeeds.
@@ -318,25 +329,30 @@ class MacBackend:
             self.buffer.clear()
             return False
         replacement_range = (old_range[0] - count, count)
-        if not set_range(element, replacement_range):
+        if not self._can_edit() or not set_range(element, replacement_range):
             self.buffer.clear()
             return False
         # Read only the bounded span we already observed, never the document.
-        if self.sources.secure() or attr(element, "AXSelectedText") != observed:
-            set_range(element, old_range)
+        if attr(element, "AXSelectedText") != observed or not self._can_edit():
+            if self._can_edit():
+                set_range(element, old_range)
             self.buffer.clear()
             return False
         if A.AXUIElementSetAttributeValue(element, "AXSelectedText", edit.after) != 0:
-            set_range(element, old_range)
+            if self._can_edit():
+                set_range(element, old_range)
             self.buffer.clear()
             return False
+        if not self._can_edit():
+            self.clear()
+            return True  # Replacement succeeded; do not move a now-stale caret.
         end = replacement_range[0] + len(edit.after.encode("utf-16-le")) // 2
         set_range(element, (end, 0))
         self._switch(edit.target)
         return True
 
     def _selection(self, proxy, focus):
-        if self.sources.secure():
+        if not self._can_edit():
             self.clear()
             return True
         r = selected_range(focus.element)
@@ -358,18 +374,20 @@ class MacBackend:
             after = self.detector.converter.convert(before)
         if before == after:
             return True
-        # Use AX when the app supports an atomic selected-text replacement; otherwise
-        # send marked Unicode events at this tap. Never touch the system clipboard.
+        # Unsupported editors are skipped. Never inject a fallback key stream.
         err, settable = A.AXUIElementIsAttributeSettable(focus.element, "AXSelectedText", None)
-        changed = err == 0 and settable and A.AXUIElementSetAttributeValue(focus.element, "AXSelectedText", after) == 0
+        changed = err == 0 and settable and self._can_edit() and A.AXUIElementSetAttributeValue(focus.element, "AXSelectedText", after) == 0
         if not changed:
-            self._type(proxy, after)
+            self.clear()
+            return True
         length = len(after.encode("utf-16-le")) // 2
         new_range = (r[0], length)
-        epoch = self.epoch
+        epoch, serial = self.epoch, self.input_serial
         def preserve():
+            if self.epoch != epoch or self.input_serial != serial:
+                return
             current = self.check_focus()
-            if self.epoch == epoch and current.state == "active" and current.element == focus.element:
+            if self.epoch == epoch and self.input_serial == serial and current.state == "active" and current.element == focus.element:
                 value = A.AXValueCreate(A.kAXValueCFRangeType, new_range)
                 A.AXUIElementSetAttributeValue(focus.element, "AXSelectedTextRange", value)
         self.defer(preserve, 0.08)
@@ -381,41 +399,78 @@ class MacBackend:
 
     def callback(self, proxy, event_type, event, _):
         try:
-            return self._handle(proxy, event_type, event)
+            self._handle(proxy, event_type, event)
         except Exception as error:
-            # Fail closed; never print exceptions with event/selection contents.
-            self.clear()
-            self.disabled = True
-            self.last_error = type(error).__name__
-            self.defer(lambda: self.notify(Focus("error")), 0)
-            return event
+            self._fault(type(error).__name__)
+        # A listen-only observer cannot suppress or replace system input.
+        return event
 
     def _handle(self, proxy, event_type, event):
         if event_type in (Q.kCGEventTapDisabledByTimeout, Q.kCGEventTapDisabledByUserInput):
-            self.clear()
-            if self.tap:
-                Q.CGEventTapEnable(self.tap, True)
+            self._fault("EventTapStopped")
             return event
         if Q.CGEventGetIntegerValueField(event, Q.kCGEventSourceUserData) == TAG:
             return event
+        self.input_serial += 1
         if event_type in (Q.kCGEventLeftMouseDown, Q.kCGEventRightMouseDown, Q.kCGEventOtherMouseDown):
             self.clear()
             return event
-        focus = self.refresh()
-        if focus.state != "active":
+        # No AX, permission IPC, layout change, editing, or Unicode reads here.
+        # Native event copies live only in a bounded queue until fresh field checks.
+        if (self.disabled or self.faulted or self.focus.state != "active"
+                or monotonic() - self.focus_checked > 0.75 or self.sources.secure()):
+            self.clear()
             return event
+        if len(self.events) == self.events.maxlen:
+            self.clear()
+            return event
+        self.events.append((monotonic(), self.epoch, self.focus,
+                            event_type, Q.CGEventCreateCopy(event)))
+        if not self.drain_pending:
+            self.drain_pending = True
+            self.defer(self.drain_events, 0.01)
+        return event
+
+    def drain_events(self):
+        self.drain_pending = False
+        batch = list(self.events)
+        serial = self.input_serial
+        self.events.clear()
+        if not batch or self.disabled or self.faulted:
+            return
+        try:
+            focus = self.refresh()  # IPC occurs after the event callback returned.
+            if focus.state != "active":
+                return
+            for i, (created, epoch, captured, kind, event) in enumerate(batch):
+                if (monotonic() - created > 0.25 or epoch != self.epoch
+                        or captured.pid != focus.pid or captured.element != focus.element
+                        or captured.layout != focus.layout or self.sources.secure()):
+                    self.clear()
+                    return
+                self.edit_serial = serial
+                self.edit_deadline = created + 0.25
+                self._process(kind, event, focus, i == len(batch) - 1)
+                # Processing can clear context or change layout intentionally.
+                if i != len(batch) - 1 and self.epoch != epoch:
+                    self.clear()
+                    return
+        except Exception as error:
+            self._fault(type(error).__name__)
+
+    def _process(self, event_type, event, focus, allow_edit=True):
+        proxy = None  # Compatibility with atomic edit helpers; never an event proxy.
         flags = Q.CGEventGetFlags(event)
         modifiers = flags & (Q.kCGEventFlagMaskCommand | Q.kCGEventFlagMaskControl | Q.kCGEventFlagMaskAlternate)
         code = Q.CGEventGetIntegerValueField(event, Q.kCGKeyboardEventKeycode)
         if event_type == Q.kCGEventFlagsChanged:
             if code in (56, 60):
-                if self.gesture.update(bool(flags & Q.kCGEventFlagMaskShift), monotonic(), bool(modifiers)):
+                if self.gesture.update(bool(flags & Q.kCGEventFlagMaskShift), monotonic(), bool(modifiers)) and allow_edit:
                     if not self._selection(proxy, focus):
                         self._replace_tail(proxy, self.buffer.manual())
             else:
                 self.gesture.clear()
             return event
-        self.epoch += 1
         self.selection_undo = None
         self.gesture.key_used()
         if modifiers:
@@ -429,16 +484,7 @@ class MacBackend:
             self.buffer.backspace()
             return event
         if code in (36, 48, 76):
-            separator = "\t" if code == 48 else "\n"
-            edit = self.buffer.finish(separator, self.settings.automatic)
-            if edit:
-                # Preserve the actual Return/Tab action (submit, focus change, etc.).
-                from ..engine import Edit
-                tail = Edit(edit.before[:-1], edit.after[:-1], edit.target)
-                self._replace_tail(proxy, tail)
-                self._post(proxy, event)
-                self.buffer.clear()
-                return None
+            # Return/Tab may submit or move focus. They always pass unchanged.
             self.buffer.clear()
             return event
         if code in (53, 115, 116, 117, 119, 121, 123, 124, 125, 126):
@@ -449,8 +495,8 @@ class MacBackend:
             self.buffer.clear()
             return event
         if text == " ":
-            edit = self.buffer.finish(text, self.settings.automatic)
-            if edit and self._replace_tail(proxy, edit, pending_separator=text):
+            edit = self.buffer.finish(text, self.settings.automatic and allow_edit)
+            if edit and self._replace_tail(proxy, edit):
                 return None
             return event
         if any(ord(c) < 32 or ord(c) > 0x052F for c in text):

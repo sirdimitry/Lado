@@ -7,15 +7,17 @@ need its own adapter and UI, not a rewrite of the correction engine.
 1. **Safety gate:** protected input, permissions, app exclusions, source pair and
    supported editable focus are checked before reading event characters.
 2. **Event stream:** a session-level Core Graphics event tap observes input.
-   Events synthesized by Lado are tagged and excluded from its own processing.
+   The production adapter is listen-only and never submits keyboard events.
+   A bounded queue of at most 16 native event copies is drained outside the callback
+   after fresh focus/security checks; stale events expire after 250 ms.
 3. **Context:** a bounded in-memory word buffer, invalidated when assumptions
    about the caret or focused element are no longer reliable.
 4. **Decision:** local dictionary frequency difference, uppercase/exception/token
    guards and stronger context requirements for single-letter tokens.
 5. **Replacement:** words use a validated, bounded accessibility range and
    selected-text replacement; unsupported word replacements are skipped without
-   deleting anything. Explicit user selections use accessibility replacement or
-   marked Unicode events. No clipboard access.
+   deleting anything. Explicit user selections also require atomic accessibility replacement;
+   unsupported editors are skipped. No clipboard access or synthetic fallback.
 6. **Source:** TIS APIs identify/select the configured layout. Key mappings are
    built from the installed layout data rather than assuming all Russian layouts
    have identical punctuation.
@@ -23,8 +25,10 @@ need its own adapter and UI, not a rewrite of the correction engine.
 
 The event callback is deliberately bounded and does not run inference or load
 files. Dictionaries load once at startup. Accessibility messages have short
-timeouts. A timed-out event tap is re-enabled with cleared context; an unexpected
-callback exception stops processing without logging the event or selection.
+timeouts. A timeout, user-requested tap disable or unexpected callback exception latches
+processing off until process restart. The UI timer cannot re-enable a faulted tap.
+AX calls and edits execute only after returning from the passive callback.
+A process-lifetime advisory lock prevents concurrent installed/source copies.
 
 No background model process, polling of document contents, whole-document reads,
 or automatic learning from typed text. A 0.5-second state check updates permissions,
@@ -59,3 +63,8 @@ With `--compatibility-test --run-compatibility-test`, the app runs synthetic phy
 key events only in the exact project-owned LadoTestPad.app. It aborts on a focus
 change, restores temporary settings, writes PASS/FAIL metadata without text, and
 closes both apps. Update checking is disabled in this mode.
+
+After the 2026-10-29 freeze report, the old native report is historical only.
+Return/Tab always retain their native action and no longer trigger corrections.
+A correction is skipped when subsequent input, a changed range, a security
+transition, or an expired edit deadline invalidates its assumptions.

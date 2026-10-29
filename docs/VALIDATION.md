@@ -1,3 +1,14 @@
+# Current safety status — 2026-10-29
+
+The published 0.1.0 DMG was followed by a reported system freeze. Its historical
+checks below are insufficient evidence of system resilience. The revised source
+passes **82 isolated automated checks**, including the formerly failing input
+safety gates, passive/deferred pipeline, stale/focus/permission failure paths and
+duplicate-instance lock. It has NOT been live-tested or installed after this
+revision. See [the safety audit](validation/safety-audit-2026-10-29.md).
+
+---
+
 # Validation / Проверки
 
 Final candidate checked on **2026-10-29**, Apple Silicon, macOS 27.2, Python 3.12.9,

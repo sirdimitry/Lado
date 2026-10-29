@@ -4,6 +4,8 @@
 
 # Lado
 
+> **Safety notice (2026-10-29): do not run the published 0.1.0 DMG.** A user reported loss of system responsiveness. Input safety fixes are in source; they have not yet passed a new isolated live macOS validation. See [the audit](docs/validation/safety-audit-2026-10-29.md).
+
 A small macOS menu-bar companion for typing in Russian and English. Forgot the
 layout? `ghbdtn` → `привет`. Press **Shift twice** to convert a word or a selection.
 Built with Python and native macOS interfaces. Windows support is planned.
