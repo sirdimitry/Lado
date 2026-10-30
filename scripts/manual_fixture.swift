@@ -5,6 +5,7 @@ final class TestPad: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var text: NSTextView!
     var password: NSSecureTextField!
+    var second: NSTextView!
     func applicationDidFinishLaunching(_ notification: Notification) {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -24,6 +25,11 @@ final class TestPad: NSObject, NSApplicationDelegate {
         text.setAccessibilityIdentifier("plain-test-field")
         scroll.documentView = text
         view.addSubview(scroll)
+        second = NSTextView(frame: NSRect(x: 28, y: 160, width: 584, height: 26))
+        second.isRichText = false
+        second.font = .monospacedSystemFont(ofSize: 18, weight: .regular)
+        second.setAccessibilityIdentifier("second-test-field")
+        view.addSubview(second)
         let caption = NSTextField(labelWithString: "Protected field — use a made-up value only")
         caption.frame = NSRect(x: 28, y: 139, width: 580, height: 25)
         view.addSubview(caption)
@@ -41,6 +47,7 @@ final class TestPad: NSObject, NSApplicationDelegate {
     }
     @objc func resetFields() {
         text.string = ""
+        second.string = ""
         password.stringValue = ""
         window.makeFirstResponder(text)
     }

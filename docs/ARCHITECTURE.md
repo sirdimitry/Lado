@@ -68,3 +68,23 @@ After the 2026-10-29 freeze report, the old native report is historical only.
 Return/Tab always retain their native action and no longer trigger corrections.
 A correction is skipped when subsequent input, a changed range, a security
 transition, or an expired edit deadline invalidates its assumptions.
+
+## rc.3 privacy and focus invariants
+
+Whole-field reads are OFF by default. Only an explicitly enabled option and manual
+double Shift can read/rewrite up to 16384 UTF-16 units. Automatic correction never
+uses this path. A known current range and unchanged value/range are required.
+The optional mode can reset formatting and is not an atomic compare-and-swap
+against changes inside the editor. No text is transmitted or intentionally saved.
+
+В rc.3 чтение целого поля выключено по умолчанию и никогда не применяется
+автоисправлением. Только отдельная опция и ручной двойной Shift допускают работу
+с целым коротким полем (до 16384 единиц UTF-16). Проверяются защита, цель, диапазон
+и неизменность значения. Режим может сбросить форматирование; абсолютной
+атомарности при изменениях редактора API не гарантирует. Ввод не сохраняется.
+
+The background probe scans bounded element references and metadata, not document
+values. Start timestamps and focus generations reject stale results. Core
+Foundation equality identifies the same field across wrappers. The stopped
+worker remains owned until exit, preventing duplicate workers. User-requested
+diagnostic reports contain only metadata and permission/error states.

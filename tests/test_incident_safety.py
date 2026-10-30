@@ -67,6 +67,7 @@ class IncidentSafetyTests(unittest.TestCase):
         b.last_error = None
         b.last_state = None
         b.tap, b.tap_source = object(), object()
+        b._confirm_target = Mock(return_value=True)
         b.defer, b.notify = Mock(), Mock()
         b.focus = M.Focus("active", 123, "test.synthetic", object(), "en")
         b.refresh = Mock(return_value=b.focus)

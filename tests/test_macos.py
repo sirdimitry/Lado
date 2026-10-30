@@ -34,6 +34,7 @@ class MacSafetyTests(unittest.TestCase):
         b.input_serial = 0
         b.edit_serial = 0
         b.edit_deadline = monotonic() + 1
+        b._confirm_target = Mock(return_value=True)
         b.defer = Mock()
         b.notify = Mock()
         b.focus = M.Focus("active", element=object())
@@ -172,3 +173,103 @@ class MacSafetyTests(unittest.TestCase):
         self.assertEqual(write.call_args.args[2], "привет ")
         self.assertEqual(select.call_args.args[1], (7,0))
         b._switch.assert_called_once_with("ru")
+
+    def value_field(self, value):
+        """Attribute store that behaves like a writable AXValue editor."""
+        store = {"AXValue": value, "AXNumberOfCharacters": len(value)}
+        read = lambda element, name: store.get(name)
+        write = lambda element, name, new: store.__setitem__(name, new) or 0
+        return store, read, write
+
+    def test_value_fallback_replaces_exact_tail(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        b.settings.value_fallback = True
+        b.focus = M.Focus("active", element=object(), mode="value")
+        b._switch = Mock()
+        store, read, write = self.value_field("hello ghbdtn")
+        with patch.object(M, "selected_range", return_value=(12, 0)), \
+             patch.object(M, "attr", side_effect=read), \
+             patch.object(M, "set_range") as select, \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", side_effect=lambda e,n,_: (0,n == "AXValue")), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock:
+            self.assertTrue(b._replace_tail(None, Edit("ghbdtn", "привет", "ru"), explicit=True))
+        self.assertEqual(store["AXValue"], "hello привет")
+        write_mock.assert_called_once()
+        b._switch.assert_called_once_with("ru")
+
+    def test_value_fallback_reads_nothing_beyond_cap(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        b.settings.value_fallback = True
+        b.focus = M.Focus("active", element=object(), mode="value")
+        store = {"AXValue": "x" * (M.MAX_VALUE_UNITS + 1),
+                 "AXNumberOfCharacters": M.MAX_VALUE_UNITS + 1}
+        with patch.object(M, "selected_range", return_value=(12, 0)), \
+             patch.object(M, "attr", side_effect=lambda e, n: store.get(n)) as read, \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", side_effect=lambda e,n,_: (0,n == "AXValue")), \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as write:
+            self.assertFalse(b._replace_tail(None, Edit("x", "y", "ru"), explicit=True))
+        write.assert_not_called()
+        names = [c.args[1] for c in read.call_args_list]
+        self.assertNotIn("AXValue", names)
+
+    def test_value_fallback_refuses_non_tail_word(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        b.settings.value_fallback = True
+        b.focus = M.Focus("active", element=object(), mode="value")
+        store, read, write = self.value_field("ghbdtnx and more")
+        with patch.object(M, "selected_range", return_value=(12, 0)), \
+             patch.object(M, "attr", side_effect=read), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", side_effect=lambda e,n,_: (0,n == "AXValue")), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock:
+            self.assertFalse(b._replace_tail(None, Edit("ghbdtn", "привет", "ru"), explicit=True))
+        write_mock.assert_not_called()
+        self.assertEqual(store["AXValue"], "ghbdtnx and more")
+
+    def test_value_fallback_is_skipped_when_disabled(self):
+        from lado.engine import Edit
+        b = self.make_backend()
+        b.settings.value_fallback = False
+        b.focus = M.Focus("active", element=object(), mode="value")
+        with patch.object(M, "selected_range", return_value=None), \
+             patch.object(M, "attr") as read, \
+             patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as write:
+            self.assertFalse(b._replace_tail(None, Edit("ghbdtn", "привет", "ru")))
+        write.assert_not_called()
+        read.assert_not_called()
+
+    def test_value_selection_replaces_only_the_selected_span(self):
+        b = self.make_backend()
+        b.settings.value_fallback = True
+        element = object()
+        focus = M.Focus("active", element=element)
+        store, read, write = self.value_field("hello ghbdtn world")
+        selected = lambda e, n: "ghbdtn" if n == "AXSelectedText" else read(e, n)
+        with patch.object(M, "selected_range", return_value=(6, 6)), \
+             patch.object(M, "attr", side_effect=selected), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable",
+                          side_effect=lambda e, n, _: (0, n == "AXValue")), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock:
+            self.assertTrue(b._selection(None, focus))
+        self.assertEqual(store["AXValue"], "hello привет world")
+        write_mock.assert_called_once()
+        self.assertEqual(b.selection_undo["after"], "привет")
+
+    def test_value_selection_refuses_mismatched_span(self):
+        b = self.make_backend()
+        b.settings.value_fallback = True
+        element = object()
+        store, read, write = self.value_field("hello xxxxxx world")
+        selected = lambda e, n: "ghbdtn" if n == "AXSelectedText" else read(e, n)
+        with patch.object(M, "selected_range", return_value=(6, 6)), \
+             patch.object(M, "attr", side_effect=selected), \
+             patch.object(M.A, "AXUIElementIsAttributeSettable",
+                          side_effect=lambda e, n, _: (0, n == "AXValue")), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock, \
+             patch.object(M.K, "NSBeep"):
+            self.assertTrue(b._selection(None, M.Focus("active", element=element)))
+        write_mock.assert_not_called()
+        self.assertEqual(store["AXValue"], "hello xxxxxx world")

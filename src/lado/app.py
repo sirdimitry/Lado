@@ -12,7 +12,7 @@ import objc
 
 from . import __version__
 from .settings import load, save
-from .platforms.macos import MacBackend
+from .platforms.macos import AX_TIMEOUT, MacBackend
 from .updates import UpdateService, trusted_download
 
 RUSSIAN = str(N.NSLocale.preferredLanguages()[0]).startswith("ru")
@@ -46,18 +46,19 @@ def button(text, frame, target, action):
     return b
 
 
-def status_image(code, locked=False):
-    """One compact indicator; the lock is part of the same image."""
+def status_image(code, locked=False, warning=False):
+    """One compact indicator; lock and warning are part of the same image."""
     image = K.NSImage.alloc().initWithSize_((24, 18))
     image.lockFocus()
     attributes = {K.NSFontAttributeName: K.NSFont.monospacedSystemFontOfSize_weight_(12, K.NSFontWeightSemibold),
                   K.NSForegroundColorAttributeName: K.NSColor.blackColor()}
     text = N.NSAttributedString.alloc().initWithString_attributes_(code, attributes)
     text.drawAtPoint_((1, 2))
-    if locked:
-        lock = K.NSImage.imageWithSystemSymbolName_accessibilityDescription_("lock.fill", "Secure input")
-        if lock:
-            lock.drawInRect_fromRect_operation_fraction_(((13, 0), (8, 8)), ((0, 0), (0, 0)),
+    symbol = "lock.fill" if locked else ("exclamationmark.circle.fill" if warning else None)
+    if symbol:
+        badge = K.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, symbol)
+        if badge:
+            badge.drawInRect_fromRect_operation_fraction_(((13, 0), (9, 9)), ((0, 0), (0, 0)),
                 K.NSCompositingOperationSourceOver, 1.0)
     image.unlockFocus()
     image.setTemplate_(True)
@@ -120,19 +121,23 @@ class LadoDelegate(N.NSObject):
         self.menu.addItem_(K.NSMenuItem.separatorItem())
         self.update_item = self.addItem(t("Проверить обновления…", "Check for Updates…"), "checkUpdates:")
         self.permission_item = self.addItem(t("Разрешения macOS…", "macOS permissions…"), "permissions:")
+        self.restart_item = self.addItem(t("Перезапустить ввод", "Restart input"), "restartInput:")
         self.addItem(t("Настройки…", "Settings…"), "showPreferences:")
         self.addItem(t("О Lado…", "About Lado…"), "showAbout:")
         self.addItem(t("Диагностика ввода…", "Input Status…"), "showInputStatus:")
         self.menu.addItem_(K.NSMenuItem.separatorItem())
         self.addItem(t("Выйти", "Quit"), "quit:", "q")
         self.item.setMenu_(self.menu)
+        self.backend.set_frontmost(K.NSWorkspace.sharedWorkspace().frontmostApplication())
         self.backend.start()
+        self.backend.start_probe()
         self.timer = N.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
             0.5, self, "tick:", None, True)
         N.NSRunLoop.mainRunLoop().addTimer_forMode_(self.timer, N.NSRunLoopCommonModes)
         self.updateStatus_(self.backend.focus)
         if self.backend.focus.state == "permission":
             self.showPermissionsWindow()
+            self.requestPermissions()
 
     @objc.python_method
     def addItem(self, title, action, key=""):
@@ -154,10 +159,14 @@ class LadoDelegate(N.NSObject):
             fn()
 
     def tick_(self, _):
-        if not self.backend.tap and A.AXIsProcessTrusted():
+        if (not self.backend.tap and not self.backend.faulted
+                and A.AXIsProcessTrusted() and Q.CGPreflightListenEventAccess()):
             if self.backend.start() and hasattr(self, "permission_window"):
                 self.permission_window.close()
+        self.backend.start_probe()
         self.backend.refresh()
+        if hasattr(self, "permission_status_label"):
+            self.permission_status_label.setStringValue_(self.permissionText())
         if (self.backend.tap and self.backend.test_bundle and
                 "--run-compatibility-test" in sys.argv and not hasattr(self, "compatibility_runner")):
             self.runCompatibility_(None)
@@ -238,22 +247,57 @@ class LadoDelegate(N.NSObject):
             code = "—"
         b = self.item.button()
         b.setTitle_("")
-        b.setImage_(status_image(code, focus.state == "secure"))
+        b.setImage_(status_image(code, focus.state == "secure",
+                                 focus.state in ("permission", "error")))
         b.setImagePosition_(K.NSImageOnly)
         b.setAppearsDisabled_(not active)
-        message = t(*STATES.get(focus.state, STATES["unsupported"]))
-        if focus.state == "active" and not self.settings.automatic:
-            message = t("Ручной режим · двойной Shift", "Manual mode · double Shift")
+        message = self.stateMessage(focus)
         b.setToolTip_("Lado · " + message)
         b.setAccessibilityLabel_("Lado · " + code + " · " + message)
         self.state_item.setTitle_(message)
         self.auto_item.setState_(K.NSControlStateValueOn if self.settings.automatic else K.NSControlStateValueOff)
         self.pause_item.setTitle_(t("Продолжить", "Resume") if self.backend.disabled else t("Пауза", "Pause"))
         self.pause_item.setEnabled_(not self.backend.faulted)
-        self.exclude_item.setEnabled_(bool(focus.bundle and focus.bundle != "com.sirdimitry.lado"))
+        bundle = focus.bundle
+        excluded = bool(bundle and bundle in self.settings.excluded_apps)
+        self.exclude_item.setEnabled_(bool(bundle and bundle != "com.sirdimitry.lado"))
+        self.exclude_item.setTitle_(
+            t("Разрешить в этом приложении", "Enable in this application") if excluded
+            else t("Не работать в этом приложении", "Exclude current application"))
+        self.restart_item.setEnabled_(self.backend.faulted or not self.backend.tap)
+        if focus.state == "permission":
+            monitor = "input-monitoring" in (focus.reason or "")
+            self.permission_item.setTitle_(
+                t("Открыть «Мониторинг ввода»…", "Open Input Monitoring…") if monitor
+                else t("Открыть «Универсальный доступ»…", "Open Accessibility…"))
+        else:
+            self.permission_item.setTitle_(t("Разрешения macOS…", "macOS permissions…"))
+
+    @objc.python_method
+    def stateMessage(self, focus):
+        if focus.state == "active" and not self.settings.automatic:
+            return t("Ручной режим · двойной Shift", "Manual mode · double Shift")
+        if focus.state == "permission":
+            reason = focus.reason or ""
+            if "input-monitoring" in reason:
+                return t("Нужен «Мониторинг ввода» в настройках macOS",
+                         "Input Monitoring permission needed")
+            if "accessibility" in reason:
+                return t("Нужен «Универсальный доступ» в настройках macOS",
+                         "Accessibility permission needed")
+        if focus.state == "excluded" and focus.bundle:
+            return t("Отключено в ", "Disabled in ") + focus.bundle
+        if focus.state == "error" and self.backend.last_error:
+            return t("Обработка остановлена. Меню → «Перезапустить ввод»",
+                     "Processing stopped. Menu → Restart input")
+        return t(*STATES.get(focus.state, STATES["unsupported"]))
 
     def menuWillOpen_(self, _):
-        self.menu_focus = self.backend.last_pointer_focus or self.backend.focus
+        # Prefer the current active field; a previous pointer snapshot may
+        # predate the click that first focused the editor.
+        current = self.backend.focus
+        previous = self.backend.last_pointer_focus
+        self.menu_focus = current if current.state == "active" else (previous or current)
         self.diagnostic_focus = self.menu_focus
         self.updateStatus_(self.menu_focus)
 
@@ -261,31 +305,94 @@ class LadoDelegate(N.NSObject):
         self.menu_focus = None
         self.updateStatus_(self.backend.focus)
 
-    def showInputStatus_(self, _):
-        # Cached metadata from BEFORE opening the menu; no text/selection read.
+    @objc.python_method
+    def diagnosticText(self):
+        from time import monotonic
         f = getattr(self, "diagnostic_focus", None) or self.backend.last_pointer_focus or self.backend.focus
-        details = "\n".join([
+        try:
+            probe = self.backend._snapshot()[1]
+            age = max(0.0, monotonic() - probe) if probe else -1.0
+        except Exception:
+            age = -1.0
+        app = self.backend._frontmost()
+        frontmost = (str(app.bundleIdentifier() or "") + " / " + str(app.processIdentifier())) if app else "—"
+        layouts = ", ".join(x["id"] for x in self.backend.sources.all()) or "—"
+        lines = [
             "Lado " + __version__,
-            t("Состояние: ", "State: ") + t(*STATES.get(f.state, STATES["unsupported"])),
+            "macOS: " + str(N.NSProcessInfo.processInfo().operatingSystemVersionString()),
+            t("Путь: ", "Path: ") + sys.executable,
+            "",
+            t("Состояние: ", "State: ") + f.state,
+            t("Сообщение: ", "Message: ") + self.stateMessage(f),
             t("Приложение: ", "Application: ") + (f.bundle or "—"),
             t("Тип поля: ", "Field type: ") + (f.role or "—"),
+            t("Режим поля: ", "Field mode: ") + (f.mode or "—"),
             t("Причина: ", "Reason: ") + (f.reason or f.state),
+            t("Передний план: ", "Frontmost: ") + frontmost,
+            "",
             "Accessibility: " + str(bool(A.AXIsProcessTrusted())),
             t("Мониторинг ввода: ", "Input Monitoring: ") + str(bool(Q.CGPreflightListenEventAccess())),
+            t("Отправка событий: ", "Post Events: ") + str(bool(Q.CGPreflightPostEventAccess())),
+            t("Защищённый ввод: ", "Secure input: ") + str(bool(self.backend.sources.secure())),
+            "",
             t("Наблюдатель подключён: ", "Observer connected: ") + str(bool(self.backend.tap)),
             t("Наблюдатель включён: ", "Observer enabled: ") + str(bool(self.backend.tap and Q.CGEventTapIsEnabled(self.backend.tap))),
-            t("Режим: только наблюдение", "Mode: listen-only"),
+            t("Фоновый опрос: ", "Background probe: ") + str(bool(self.backend._probe_thread and self.backend._probe_thread.is_alive())),
+            t("Возраст опроса, с: ", "Probe age, s: ") + (f"{age:.2f}" if age >= 0 else "—"),
+            t("Последняя ошибка: ", "Last error: ") + (self.backend.last_error or "—"),
+            "AX timeout: " + str(AX_TIMEOUT),
+            "AX error code: " + str(self.backend.last_ax_error),
             "",
+            t("Раскладки: ", "Layouts: ") + layouts,
+            t("Настройки: авто=%s, обновления=%s, двойной Shift=%s мс, исключений=%s, слов=%s, value-fallback=%s",
+              "Settings: automatic=%s, updates=%s, double Shift=%s ms, app exclusions=%s, words=%s, value-fallback=%s") % (
+                self.settings.automatic, self.settings.check_updates, self.settings.double_shift_ms,
+                len(self.settings.excluded_apps), len(self.settings.exceptions),
+                bool(getattr(self.settings, "value_fallback", False))),
+            "",
+            t("Режим: только наблюдение, без отправки клавиш.", "Mode: listen-only, no keystroke submission."),
             t("Диагностика не содержит набранный текст или содержимое выделения.",
               "This status contains no typed text or selection contents."),
-        ])
+        ]
+        return "\n".join(lines)
+
+    def showInputStatus_(self, _):
+        # Cached metadata from BEFORE opening the menu; no text/selection read.
+        details = self.diagnosticText()
         if not hasattr(self, "input_status_window"):
-            self.input_status_window = self.window(t("Диагностика ввода", "Input Status"), 560, 390)
-            self.input_status_label = label(details, ((22, 20), (516, 350)), 13)
+            self.input_status_window = self.window(t("Диагностика ввода", "Input Status"), 620, 520)
+            self.input_status_label = label(details, ((22, 66), (576, 434)), 12)
+            self.input_status_label.setSelectable_(True)
             self.input_status_window.contentView().addSubview_(self.input_status_label)
+            self.input_status_window.contentView().addSubview_(
+                button(t("Обновить", "Refresh"), ((22, 22), (120, 32)), self, "refreshInputStatus:"))
+            self.input_status_window.contentView().addSubview_(
+                button(t("Сохранить отчёт…", "Save report…"), ((152, 22), (170, 32)), self, "saveDiagnostics:"))
         else:
             self.input_status_label.setStringValue_(details)
         self.show(self.input_status_window)
+
+    def refreshInputStatus_(self, _):
+        self.backend._wake_probe()
+        self.defer(lambda: self.showInputStatus_(None), 0.35)
+
+    def saveDiagnostics_(self, _):
+        panel = K.NSSavePanel.savePanel()
+        panel.setTitle_(t("Сохранить диагностику Lado", "Save Lado diagnostics"))
+        panel.setNameFieldStringValue_("lado-diagnostics.txt")
+        panel.setCanCreateDirectories_(True)
+
+        def saved(result):
+            if result != K.NSModalResponseOK or not panel.URL():
+                return
+            path = str(panel.URL().path())
+            data = (self.diagnosticText() + "\n").encode("utf-8")
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            os.chmod(path, 0o600)
+
+        panel.beginSheetModalForWindow_completionHandler_(self.input_status_window, saved)
 
     def toggleAuto_(self, _):
         self.settings.automatic = not self.settings.automatic
@@ -300,11 +407,41 @@ class LadoDelegate(N.NSObject):
 
     def excludeApp_(self, _):
         bundle = self.backend.focus.bundle
-        if bundle and bundle not in self.settings.excluded_apps:
+        if not bundle or bundle == "com.sirdimitry.lado":
+            return
+        if bundle in self.settings.excluded_apps:
+            self.settings.excluded_apps = [x for x in self.settings.excluded_apps if x != bundle]
+        elif len(self.settings.excluded_apps) < 5000:
             self.settings.excluded_apps.append(bundle)
-            save(self.settings)
-            self.backend.clear()
-            self.backend.refresh()
+        save(self.settings)
+        self.backend.clear()
+        self.backend.refresh()
+
+    def restartInput_(self, _):
+        self.backend.restart()
+
+    @objc.python_method
+    def permissionText(self):
+        trusted = bool(A.AXIsProcessTrusted())
+        monitoring = bool(Q.CGPreflightListenEventAccess())
+        mark = lambda ok: "✓" if ok else "—"
+        return "\n".join([
+            t("Универсальный доступ: ", "Accessibility: ") + mark(trusted),
+            t("Мониторинг ввода: ", "Input Monitoring: ") + mark(monitoring),
+        ])
+
+    @objc.python_method
+    def requestPermissions(self):
+        if not A.AXIsProcessTrusted():
+            A.AXIsProcessTrustedWithOptions({A.kAXTrustedCheckOptionPrompt: True})
+        if not Q.CGPreflightListenEventAccess():
+            Q.CGRequestListenEventAccess()
+
+    @objc.python_method
+    def permissionsURL(self):
+        if A.AXIsProcessTrusted() and not Q.CGPreflightListenEventAccess():
+            return "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        return "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
     @objc.python_method
     def window(self, title, width, height):
@@ -325,26 +462,47 @@ class LadoDelegate(N.NSObject):
     @objc.python_method
     def showPermissionsWindow(self):
         if not hasattr(self, "permission_window"):
-            w = self.window(t("Добро пожаловать в Lado", "Welcome to Lado"), 500, 360)
+            w = self.window(t("Добро пожаловать в Lado", "Welcome to Lado"), 560, 430)
             v = w.contentView()
-            image = K.NSImageView.alloc().initWithFrame_(((26, 260), (60, 60)))
+            image = K.NSImageView.alloc().initWithFrame_(((26, 330), (60, 60)))
             image.setImage_(K.NSImage.alloc().initWithContentsOfFile_(resource("icon.png")))
             v.addSubview_(image)
-            v.addSubview_(label("Lado", ((102, 277), (350, 35)), 27, bold=True))
-            v.addSubview_(label(t("Ваши слова остаются у вас.", "Your words stay with you."), ((28, 227), (444, 26)), 17))
+            v.addSubview_(label("Lado", ((102, 347), (420, 35)), 27, bold=True))
+            v.addSubview_(label(t("Ваши слова остаются у вас.", "Your words stay with you."), ((28, 297), (504, 26)), 17))
+            self.permission_status_label = label(self.permissionText(), ((28, 245), (504, 48)), 13, bold=True)
+            v.addSubview_(self.permission_status_label)
             v.addSubview_(label(t(
-                "Для двойного Shift и исправления раскладки разрешите Lado доступ в разделе «Универсальный доступ». macOS также может запросить «Мониторинг ввода». Затем вернитесь к набору — Lado проверит доступ автоматически.",
-                "Allow Lado in Accessibility to enable double Shift and layout correction. macOS may also request Input Monitoring. Return to typing afterwards — Lado checks permissions automatically."), ((28, 118), (444, 102))))
-            v.addSubview_(label(t("Локальный ввод. Без истории. Без подписки.", "Local typing. No typing history. No subscription."), ((28, 78), (444, 30)), 12, K.NSColor.secondaryLabelColor()))
-            v.addSubview_(button(t("Открыть настройки macOS", "Open macOS Settings"), ((232, 24), (240, 34)), self, "permissions:"))
-            v.addSubview_(button(t("Настройки Lado…", "Lado Settings…"), ((26, 24), (180, 34)), self, "showPreferences:"))
+                "Нужны оба разрешения macOS. «Универсальный доступ» позволяет заменить слово, "
+                "«Мониторинг ввода» — видеть клавиши. Lado проверяет их автоматически каждые 0,5 с. "
+                "После переустановки ad-hoc сборки удалите старую строку Lado из списка и добавьте "
+                "новую копию заново: одного включённого переключателя может быть недостаточно.",
+                "Both macOS permissions are required. Accessibility lets Lado replace a word; "
+                "Input Monitoring lets it observe keys. Lado re-checks them every 0.5 s. "
+                "After replacing an ad-hoc build, remove the old Lado row and add the new copy: "
+                "an already-enabled old switch may not be enough."), ((28, 120), (504, 118)), 12))
+            v.addSubview_(label(t("Локальный ввод. Без истории. Без подписки.", "Local typing. No typing history. No subscription."), ((28, 92), (504, 22)), 11, K.NSColor.secondaryLabelColor()))
+            v.addSubview_(button(t("Открыть «Универсальный доступ»", "Open Accessibility"), ((28, 48), (230, 32)), self, "permissions:"))
+            v.addSubview_(button(t("Открыть «Мониторинг ввода»", "Open Input Monitoring"), ((270, 48), (230, 32)), self, "openInputMonitoring:"))
+            v.addSubview_(button(t("Проверить снова", "Check again"), ((28, 12), (150, 30)), self, "recheckPermissions:"))
+            v.addSubview_(button(t("Настройки Lado…", "Lado Settings…"), ((388, 12), (144, 30)), self, "showPreferences:"))
             self.permission_window = w
+        self.permission_status_label.setStringValue_(self.permissionText())
         self.show(self.permission_window)
 
     def permissions_(self, _):
-        A.AXIsProcessTrustedWithOptions({A.kAXTrustedCheckOptionPrompt: True})
-        Q.CGRequestListenEventAccess()
+        self.requestPermissions()
         self.openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+
+    def openInputMonitoring_(self, _):
+        self.requestPermissions()
+        self.openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+
+    def recheckPermissions_(self, _):
+        self.requestPermissions()
+        self.backend.restart()
+        self.backend._wake_probe()
+        if hasattr(self, "permission_status_label"):
+            self.permission_status_label.setStringValue_(self.permissionText())
 
     @objc.python_method
     def textEditor(self, view, frame, text):
@@ -384,15 +542,15 @@ class LadoDelegate(N.NSObject):
             pages.append(page)
         v.addSubview_(tabs)
         general, exceptions, privacy = pages
-        self.auto_box = self.checkbox(t("Исправлять раскладку автоматически", "Correct keyboard layout automatically"), ((18, 304), (530, 25)), self.settings.automatic)
+        self.auto_box = self.checkbox(t("Исправлять раскладку автоматически", "Correct keyboard layout automatically"), ((18, 310), (530, 25)), self.settings.automatic)
         general.addSubview_(self.auto_box)
-        general.addSubview_(label(t("Рабочая пара раскладок", "Keyboard layout pair"), ((18, 261), (530, 25)), bold=True))
+        general.addSubview_(label(t("Рабочая пара раскладок", "Keyboard layout pair"), ((18, 270), (530, 25)), bold=True))
         installed = self.backend.sources.all()
         self.source_ids = []
         self.source_popups = []
         for x, lang, selected in ((18, "en", self.settings.english_source), (298, "ru", self.settings.russian_source)):
             choices = [s for s in installed if s["language"] == lang]
-            popup = K.NSPopUpButton.alloc().initWithFrame_pullsDown_(((x, 222), (254, 30)), False)
+            popup = K.NSPopUpButton.alloc().initWithFrame_pullsDown_(((x, 232), (254, 30)), False)
             popup.addItemsWithTitles_([s["name"] for s in choices] or [t("Добавьте раскладку в macOS", "Add this layout in macOS")])
             ids = [s["id"] for s in choices]
             if selected in ids:
@@ -400,18 +558,20 @@ class LadoDelegate(N.NSObject):
             self.source_ids.append(ids)
             self.source_popups.append(popup)
             general.addSubview_(popup)
-        general.addSubview_(label(t("На остальных языках Lado приостанавливается.", "Lado pauses when another layout is active."), ((18, 183), (530, 28)), 12, K.NSColor.secondaryLabelColor()))
-        general.addSubview_(label(t("Интервал двойного Shift", "Double Shift interval"), ((18, 139), (300, 26))))
-        self.interval = K.NSPopUpButton.alloc().initWithFrame_pullsDown_(((365, 137), (186, 30)), False)
+        general.addSubview_(label(t("На остальных языках Lado приостанавливается.", "Lado pauses when another layout is active."), ((18, 198), (530, 26)), 12, K.NSColor.secondaryLabelColor()))
+        general.addSubview_(label(t("Интервал двойного Shift", "Double Shift interval"), ((18, 160), (300, 26))))
+        self.interval = K.NSPopUpButton.alloc().initWithFrame_pullsDown_(((365, 158), (186, 30)), False)
         self.interval.addItemsWithTitles_(["300 ms", "400 ms", "500 ms", "600 ms"])
         self.interval.selectItemAtIndex_(min(range(4), key=lambda i: abs([300,400,500,600][i] - self.settings.double_shift_ms)))
         general.addSubview_(self.interval)
-        self.login_box = self.checkbox(t("Запускать при входе в систему", "Start at login"), ((18, 100), (530, 26)), self.loginPath().exists())
+        self.value_box = self.checkbox(t("Двойной Shift: читать целое поле (до 16 тыс. знаков)", "Double Shift: allow whole-field reads (up to 16K characters)"), ((18, 122), (530, 26)), getattr(self.settings, "value_fallback", False))
+        general.addSubview_(self.value_box)
+        self.login_box = self.checkbox(t("Запускать при входе в систему", "Start at login"), ((18, 88), (530, 26)), self.loginPath().exists())
         self.login_box.setEnabled_(bool(getattr(sys, "frozen", False)))
         general.addSubview_(self.login_box)
-        self.updates_box = self.checkbox(t("Проверять новые версии на GitHub", "Check GitHub for new versions"), ((18, 65), (530, 26)), self.settings.check_updates)
+        self.updates_box = self.checkbox(t("Проверять новые версии на GitHub", "Check GitHub for new versions"), ((18, 54), (530, 26)), self.settings.check_updates)
         general.addSubview_(self.updates_box)
-        general.addSubview_(label(t("Двойной Shift: выделенный текст или последнее слово. ЗАГЛАВНЫЕ слова автоматика пропускает.", "Double Shift: selected text or the last word. Automatic correction skips ALL-CAPS words."), ((18, 10), (530, 43)), 12, K.NSColor.secondaryLabelColor()))
+        general.addSubview_(label(t("Двойной Shift: выделенный текст или последнее слово. ЗАГЛАВНЫЕ слова автоматика пропускает.", "Double Shift: selected text or the last word. Automatic correction skips ALL-CAPS words."), ((18, 6), (530, 40)), 12, K.NSColor.secondaryLabelColor()))
         exceptions.addSubview_(label(t("Личные слова", "Personal words"), ((18, 308), (254, 24)), bold=True))
         exceptions.addSubview_(label(t("Приложения", "Applications"), ((298, 308), (254, 24)), bold=True))
         self.words_editor = self.textEditor(exceptions, ((18, 88), (254, 214)), "\n".join(self.settings.exceptions))
@@ -436,8 +596,8 @@ class LadoDelegate(N.NSObject):
         exceptions.addSubview_(label(t("По одному на строку. Исключения не мешают ручному двойному Shift.", "One entry per line. Word exceptions do not block manual double Shift."), ((18, 7), (530, 36)), 12, K.NSColor.secondaryLabelColor()))
         privacy.addSubview_(label(t("Ваш текст не покидает Mac", "Your text stays on your Mac"), ((20, 291), (525, 35)), 21, bold=True))
         privacy.addSubview_(label(t(
-            "• Текст не передаётся. Нет аналитики и истории ввода.\n\n• В памяти — до трёх завершённых слов и текущего слова. Контекст очищается при смене поля, паузе и после 30 секунд бездействия.\n\n• Выделение читается по двойному Shift; при исправлении сверяется только короткий наблюдавшийся фрагмент. Последняя операция хранится в памяти до 30 секунд.\n\n• В защищённых полях обработка отключается, контекст очищается, значок показывает замок.\n\n• На диск сохраняются только настройки и ваши явные исключения. Проверка обновлений запрашивает лишь публичные релизы GitHub и отключается в настройках.",
-            "• Typed text is never transmitted. No analytics or typing history.\n\n• Memory holds up to three completed words and the current word. Context clears on focus change, pause and after 30 idle seconds.\n\n• User selections are read on double Shift; word correction checks only the short observed span. The last operation stays in memory for up to 30 seconds.\n\n• Protected fields disable processing, clear context and show a lock icon.\n\n• Only preferences and explicit exceptions are saved. Optional update checks request only public GitHub release metadata; disable them in Settings."), ((20, 20), (530, 265)), 13))
+            "• Текст не передаётся. Нет аналитики и истории ввода.\n\n• В RAM — до трёх слов и текущего слова; очистка при смене поля, паузе и через 30 секунд.\n\n• Двойной Shift читает выделение; обычная замена проверяет короткий наблюдавшийся фрагмент.\n\n• Чтение целого поля выключено по умолчанию. Доп. режим работает только вручную, до 16 тыс. знаков, и может сбросить форматирование.\n\n• В защищённых полях обработка отключена, контекст очищается, показан замок.\n\n• Сохраняются настройки и явные исключения. Проверку публичных релизов GitHub можно отключить.",
+            "• No text transmission, analytics or typing history.\n\n• RAM holds up to three completed words and the current word; clears on field change, pause and 30 idle seconds.\n\n• Double Shift reads the selection. Normal edits check only the short observed span.\n\n• Whole-field reads are OFF by default. The optional manual mode is limited to 16K characters and may reset formatting.\n\n• Protected fields disable processing, clear context and show a lock.\n\n• Only preferences and explicit exceptions are saved. Public GitHub update checks can be disabled."), ((20, 20), (530, 265)), 12))
         v.addSubview_(label(t("Ввод локально. Без истории ввода.", "Local typing. No typing history."), ((24, 26), (360, 28)), 12, K.NSColor.secondaryLabelColor()))
         v.addSubview_(button(t("Сохранить", "Save"), ((493, 22), (122, 34)), self, "savePreferences:"))
         self.preferences = w
@@ -466,6 +626,7 @@ class LadoDelegate(N.NSObject):
         if not self.settings.check_updates:
             self.pending_update = None
         self.settings.case_sensitive = bool(self.case_box.state())
+        self.settings.value_fallback = bool(self.value_box.state())
         self.settings.double_shift_ms = [300,400,500,600][self.interval.indexOfSelectedItem()]
         self.settings.exceptions = list(dict.fromkeys(x.strip()[:256] for x in str(self.words_editor.string()).splitlines() if x.strip()))[:5000]
         self.settings.excluded_apps = list(self.excluded_draft)
@@ -576,6 +737,16 @@ def run():
     from .settings import settings_path
     instance = InstanceLock(settings_path().parent / "instance.lock")
     if not instance.acquire():
+        app = K.NSApplication.sharedApplication()
+        app.setActivationPolicy_(K.NSApplicationActivationPolicyAccessory)
+        app.activateIgnoringOtherApps_(True)
+        alert = K.NSAlert.alloc().init()
+        alert.setMessageText_(t("Lado уже запущен", "Lado is already running"))
+        alert.setInformativeText_(t(
+            "Найдите значок EN / RU в строке меню. Второй экземпляр не запущен, чтобы не обрабатывать ввод дважды.",
+            "Find the EN / RU item in the menu bar. A second copy was not started to avoid processing input twice."))
+        alert.addButtonWithTitle_("OK")
+        alert.runModal()
         return
     try:
         app = K.NSApplication.sharedApplication()

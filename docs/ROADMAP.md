@@ -89,3 +89,11 @@ A checked box means completed work, not a planned capability.
 - [x] 82 изолированных теста; macOS добавлена в матрицу CI.
 - [ ] Новый живой прогон в отдельной macOS-среде, медленные/зависшие редакторы.
 - [ ] Новый проверенный DMG после живого прогона. Старый 0.1.0 не использовать.
+
+## rc.3 — 2026-10-30
+
+- [x] Background focus probe, deadlines, field equality and stale-result rejection.
+- [x] UTF-16 selection regression and safe default for whole-field compatibility.
+- [x] Manual observer restart, permission UI and metadata-only diagnostics.
+- [x] 129 isolated checks and installed candidate packaging verification.
+- [ ] Expanded native and actual ChatGPT/Codex field validation.

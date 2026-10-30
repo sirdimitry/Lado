@@ -133,6 +133,54 @@ class FocusTests(unittest.TestCase):
         self.assertEqual(f.reason, "focus-chain-limit")
         self.assertEqual(self.a.AXUIElementSetMessagingTimeout.call_count, 4)
 
+    def test_missing_caret_stays_unsupported_even_when_value_mode_enabled(self):
+        self.b.settings.value_fallback = True
+        self.ranges.return_value = None
+        self.a.AXUIElementIsAttributeSettable.return_value = (0, True)
+        f = self.focus()
+        self.assertEqual((f.state, f.reason), ("unsupported", "selection-range-unavailable"))
+
+    def test_value_mode_can_be_disabled_for_privacy(self):
+        self.b.settings.value_fallback = False
+        self.ranges.return_value = None
+        self.a.AXUIElementIsAttributeSettable.return_value = (0, True)
+        f = self.focus()
+        self.assertEqual((f.state, f.reason),
+                         ("unsupported", "selection-range-unavailable"))
+
+    def test_web_accessibility_is_requested_when_focus_is_missing(self):
+        self.attrs[self.app, "AXFocusedUIElement"] = None
+        self.a.AXUIElementSetAttributeValue.return_value = 0
+        self.a.AXUIElementIsAttributeSettable.return_value = (0, False)
+        self.assertEqual(self.focus().reason, "no-focused-element")
+        names = [c.args[1] for c in self.a.AXUIElementSetAttributeValue.call_args_list]
+        self.assertIn("AXManualAccessibility", names)
+
+    def test_bounded_search_finds_focused_field(self):
+        window, field = object(), object()
+        self.attrs[self.app, "AXFocusedUIElement"] = window
+        self.attrs[self.app, "AXFocusedWindow"] = window
+        self.attrs[window, "AXRole"] = "AXWindow"
+        self.attrs[window, "AXChildren"] = [field]
+        self.attrs[field, "AXRole"] = "AXTextArea"
+        self.attrs[field, "AXFocused"] = True
+        f = self.focus()
+        self.assertEqual((f.state, f.element), ("active", field))
+
+    def test_focus_search_never_reads_document_values(self):
+        window, field = object(), object()
+        self.attrs[self.app, "AXFocusedUIElement"] = window
+        self.attrs[self.app, "AXFocusedWindow"] = window
+        self.attrs[window, "AXRole"] = "AXWindow"
+        self.attrs[window, "AXChildren"] = [field]
+        self.attrs[field, "AXRole"] = "AXTextArea"
+        self.attrs[field, "AXFocused"] = True
+        self.focus()
+        names = [c.args[1] for c in self.read.call_args_list]
+        self.assertNotIn("AXValue", names)
+        self.assertNotIn("AXSelectedText", names)
+        self.assertNotIn("AXSelectedTextRange", names)
+
 
 if __name__ == "__main__":
     unittest.main()

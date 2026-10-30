@@ -10,6 +10,8 @@ class Settings:
     automatic: bool = True
     check_updates: bool = True
     double_shift_ms: int = 400
+    # Bounded AXValue fallback for editors that expose no writable caret range.
+    value_fallback: bool = False
     english_source: str = "com.apple.keylayout.ABC"
     russian_source: str = "com.apple.keylayout.Russian"
     exceptions: list[str] = field(default_factory=list)

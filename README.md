@@ -4,6 +4,8 @@
 
 # Lado
 
+**rc.3:** revised focus probing and field identity; 129 isolated checks pass. Whole-field compatibility is optional and OFF by default. ChatGPT/Codex field support needs live confirmation. [Changes](docs/releases/0.1.1-rc.3.md).
+
 > **Safety notice (2026-10-29): do not run the published 0.1.0 DMG.** A user reported loss of system responsiveness. Input safety fixes are in source; they have not yet passed a new isolated live macOS validation. See [the audit](docs/validation/safety-audit-2026-10-29.md).
 
 A small macOS menu-bar companion for typing in Russian and English. Forgot the

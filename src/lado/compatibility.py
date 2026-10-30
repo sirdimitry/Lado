@@ -8,12 +8,13 @@ import json
 import os
 from pathlib import Path
 import sys
+from time import monotonic
 
 import AppKit as K
 import ApplicationServices as A
 import Quartz as Q
 
-from .platforms.macos import attr, selected_range, set_range
+from .platforms.macos import attr, selected_range, set_range, same_element
 
 FIXTURE = "com.sirdimitry.lado-testpad"
 
@@ -28,6 +29,7 @@ class CompatibilityRunner:
         self.fixture = None
         self.plain = None
         self.secure = None
+        self.second = None
         self.original_source = self.backend.sources.current()
         self.original_automatic = self.backend.settings.automatic
         self.original_exceptions = list(self.backend.settings.exceptions)
@@ -117,6 +119,7 @@ class CompatibilityRunner:
         A.AXUIElementSetMessagingTimeout(app, .1)
         self.plain = self.find(app, "plain-test-field")
         self.secure = self.find(app, "secure-test-field")
+        self.second = self.find(app, "second-test-field")
         if not self.record("native_test_controls", self.plain is not None and self.secure is not None):
             return
         indicator = self.ui.item.button()
@@ -136,6 +139,10 @@ class CompatibilityRunner:
             ("selected_paragraph_reverse", self.paragraph_reverse),
             ("one_letter_manual", self.one_letter),
             ("one_letter_reverse", self.one_letter_reverse),
+            ("emoji_selection", self.emoji_selection),
+            ("emoji_selection_reverse", self.emoji_reverse),
+            ("same_role_field_transition", self.field_transition),
+            ("continuous_typing_after_source_switch", self.continuous),
             ("secure_field_blocks_processing", self.password),
         ]
         self.next_job()
@@ -167,6 +174,7 @@ class CompatibilityRunner:
             return False
         set_range(self.plain, (len(initial.encode("utf-16-le")) // 2, 0))
         self.backend.sources.select(self.backend.settings.english_source)
+        self.backend.set_frontmost(self.fixture)
         self.backend.clear()
         self.backend.refresh()
         return True
@@ -193,9 +201,18 @@ class CompatibilityRunner:
         chars = self.backend.sources._characters(self.backend.settings.english_source)
         keys = {char: key for key, char in chars.items()}
         index = [0]
+        waiting_since = monotonic()
         def one():
             if not self.require_active():
                 return
+            if index[0] == 0:
+                f = self.backend.refresh()
+                if f.state != "active" or not same_element(f.element, self.plain) or f.layout != self.backend.sources.current():
+                    if monotonic() - waiting_since > 3:
+                        self.record("field_ready_for_typing", False)
+                        return
+                    self.later(.05, one)
+                    return
             if index[0] >= len(text):
                 self.later(.15, done)
                 return
@@ -265,6 +282,38 @@ class CompatibilityRunner:
 
     def one_letter_reverse(self):
         self.double_shift(lambda: self.check_text("d"))
+
+    def emoji_selection(self):
+        if self.reset("😀 ghbdtn world"):
+            set_range(self.plain, (3, 6))
+            self.later(.25, lambda: self.double_shift(lambda: self.check_text("😀 привет world")))
+
+    def emoji_reverse(self):
+        self.double_shift(lambda: self.check_text("😀 ghbdtn world"))
+
+    def field_transition(self):
+        if self.second is None:
+            self.record("second_native_field", False)
+            return
+        if self.reset():
+            def change():
+                A.AXUIElementSetAttributeValue(self.second, "AXValue", "ghbdtn")
+                set_range(self.second, (6, 0))
+                A.AXUIElementSetAttributeValue(self.second, "AXFocused", True)
+                self.later(.5, lambda: self.double_shift(check))
+            def check():
+                if not self.require_active():
+                    return
+                condition = (str(attr(self.second, "AXValue") or "") == "ghbdtn"
+                             and not self.backend.buffer.current
+                             and same_element(self.backend.focus.element, self.second))
+                if self.record(self.current_case, condition):
+                    self.later(.1, self.next_job)
+            self.later(.15, lambda: self.type_keys("ghbdtn", change))
+
+    def continuous(self):
+        if self.reset():
+            self.later(.15, lambda: self.type_keys("ghbdtn vbh ", lambda: self.check_text("привет мир ")))
 
     def password(self):
         if not self.require_active():
