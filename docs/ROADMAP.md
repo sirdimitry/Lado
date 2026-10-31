@@ -104,8 +104,9 @@ A checked box means completed work, not a planned capability.
 - [x] Codex bounded tagged synthetic word fallback and second-press double Shift.
 - [x] Fresh foreground PID/AX field preflight; synthetic target limited to Codex.
 - [x] 162 isolated checks, DMG build, strict signature and integrity checks.
-- [ ] Installed-package live validation after permission refresh.
+- [x] Installed rc.8 WebKit 23/23 on attempt 3; initial failures documented.
 - [ ] Selected-text conversion in Chromium; other Chromium applications.
 
 - [x] Installed rc.8: WebKit 23/23 on third attempt; two startup failures preserved.
-- [ ] Installed Codex check; unresolved initial test input loss.
+- [x] User confirmed installed Codex automatic correction and double-Shift reversal.
+- [ ] Investigate initial test input loss; longer sessions and Chromium selections.
