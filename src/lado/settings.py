@@ -12,6 +12,9 @@ class Settings:
     double_shift_ms: int = 400
     # Bounded AXValue fallback for editors that expose no writable caret range.
     value_fallback: bool = False
+    # Chromium contenteditable ignores AX range edits. This opt-out enables one
+    # bounded synthetic Backspace+Unicode batch, accepted only after read-back.
+    chromium_synthetic: bool = True
     english_source: str = "com.apple.keylayout.ABC"
     russian_source: str = "com.apple.keylayout.Russian"
     exceptions: list[str] = field(default_factory=list)

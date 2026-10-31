@@ -1,4 +1,27 @@
-# Current candidate — 2026-10-31
+# rc.8 package — 2026-10-31
+
+162 isolated tests pass, including fresh-focus rejection and the Codex-only synthetic gate. DMG integrity, strict ad-hoc signature and bundled self-test pass. rc.8 is installed at /Applications/Lado.app; live installed-package validation awaits refreshed macOS permission. Historical source-run results below are not a claim that this installed package has already passed.
+
+The synthetic fallback is enabled only for com.openai.codex. Other Chromium apps are untested and do not get synthetic replacement. Whole-field writes remain disabled.
+
+---
+
+# Release candidate rc.8 — 2026-10-31 (source only)
+
+**159 isolated tests pass. 23/23 live local WKWebView cases pass. Live Codex auto-correction and double-Shift reversal pass.**
+
+- **WebKit:** strict `TextOperationReplacePreserveCase`, replacement-response validation and bounded read-back. Green and unchanged from rc.7.
+- **Chromium/Codex:** Chromium accepts AX range writes but does not apply them, and `MacAccessibilityTextOperation` is disabled by default. rc.8 adds **one** bounded, tagged synthetic batch (Keyboop technique: Backspace + Unicode) only for detected Chromium/Electron, only after the AX read-back proves the text did not change. Maximum 128 characters, no retry, and `chromium_synthetic` can disable it. Verification reads only the replaced span via `AXStringForRange`.
+- **Double Shift:** fires on the **second press** (Keyboop-style), not on release. Any ordinary key or mouse event between the taps cancels the gesture. Synthetic events are created with `flags=0`, so a correction made while Shift is still held keeps the intended case.
+- **Live target:** `/Applications/ChatGPT.app` (`com.openai.codex` 26.1027.30824). `ghbdtn ` → `привет `; double Shift (fired on the second press while Shift was held) → `ghbdtn `; composer cleared. Diagnostic: `range-replaced/synthetic-unicode`.
+- **Limits:** selected-text conversion in Chromium still uses the AX path and is not covered by the synthetic fallback. The synthetic verification blocks the main run loop for roughly 0.15–0.2 s. Physical input is not suppressed; the posting window is small but a race is possible. Other Chromium apps were not tested live. Whole-field edits remain disabled.
+- No clipboard, typing history, network or telemetry. TIS remains main-thread only.
+- The installed `/Applications/Lado.app` is rc.7 (ad-hoc), not rc.8. No DMG, build or notarization was produced, and the source changes are not committed.
+- Reports: [WebKit 23/23](validation/webkit-0.1.1-rc.8-2026-10-31.json), [Codex Chromium synthetic](validation/codex-chromium-synthetic-2026-10-31.md).
+
+---
+
+# Previous candidate — rc.6 (historical)
 
 rc.6 passes 145 isolated tests and packaging checks. Live WebKit automatic correction FAILS despite granted permissions, an active field and successful AX write responses. Do not claim ChatGPT compatibility or publish this as a working release. The earlier AppKit passes below do not cover this defect.
 

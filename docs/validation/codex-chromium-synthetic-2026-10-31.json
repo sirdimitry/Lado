@@ -1,0 +1,28 @@
+{
+  "format": "lado-codex-check-v1",
+  "target": {
+    "bundle": "com.openai.codex",
+    "version": "26.1027.30824",
+    "engine": "Chromium 156.0.8078.48"
+  },
+  "passed": true,
+  "cases": [
+    {
+      "case": "automatic_wrong_layout",
+      "passed": true,
+      "replacement_result": "range-replaced/synthetic-unicode"
+    },
+    {
+      "case": "double_shift_reverse",
+      "passed": true,
+      "replacement_result": "range-replaced/synthetic-unicode"
+    }
+  ],
+  "contains_typed_text": false,
+  "notes": [
+    "Synthetic text only; nothing was sent.",
+    "Composer was empty before the check and cleared afterwards.",
+    "Selected-text conversion in Chromium is not covered by the synthetic fallback.",
+    "Double Shift fires on the second press; synthetic events use flags=0 so the replacement keeps its case."
+  ]
+}

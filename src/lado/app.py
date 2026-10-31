@@ -566,6 +566,8 @@ class LadoDelegate(N.NSObject):
         self.interval.selectItemAtIndex_(min(range(4), key=lambda i: abs([300,400,500,600][i] - self.settings.double_shift_ms)))
         general.addSubview_(self.interval)
         self.value_box = self.checkbox(t("Двойной Shift: читать целое поле (до 16 тыс. знаков)", "Double Shift: allow whole-field reads (up to 16K characters)"), ((18, 122), (530, 26)), getattr(self.settings, "value_fallback", False))
+        self.value_box.setState_(False)
+        self.value_box.setEnabled_(False)
         general.addSubview_(self.value_box)
         self.login_box = self.checkbox(t("Запускать при входе в систему", "Start at login"), ((18, 88), (530, 26)), self.loginPath().exists())
         self.login_box.setEnabled_(bool(getattr(sys, "frozen", False)))
@@ -627,7 +629,7 @@ class LadoDelegate(N.NSObject):
         if not self.settings.check_updates:
             self.pending_update = None
         self.settings.case_sensitive = bool(self.case_box.state())
-        self.settings.value_fallback = bool(self.value_box.state())
+        self.settings.value_fallback = False
         self.settings.double_shift_ms = [300,400,500,600][self.interval.indexOfSelectedItem()]
         self.settings.exceptions = list(dict.fromkeys(x.strip()[:256] for x in str(self.words_editor.string()).splitlines() if x.strip()))[:5000]
         self.settings.excluded_apps = list(self.excluded_draft)

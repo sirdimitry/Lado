@@ -1,0 +1,116 @@
+{
+  "format": "lado-compatibility-v1",
+  "scope": "com.sirdimitry.lado-testpad",
+  "app": "Lado 0.1.1-rc.8 source (final local project run)",
+  "date": "2026-10-31",
+  "environment": {
+    "macos": "27.2 (26B118)",
+    "python": "3.12.9",
+    "pyobjc": "12.2.2",
+    "arch": "arm64"
+  },
+  "fixture": "local WKWebView contenteditable + textarea + password input, synthetic text only, no network",
+  "passed": true,
+  "cases": [
+    {
+      "case": "owned_fixture_running",
+      "passed": true
+    },
+    {
+      "case": "permissions",
+      "passed": true
+    },
+    {
+      "case": "event_tap_connected",
+      "passed": true
+    },
+    {
+      "case": "fixture_foreground",
+      "passed": true
+    },
+    {
+      "case": "native_test_controls",
+      "passed": true
+    },
+    {
+      "case": "single_language_indicator",
+      "passed": true
+    },
+    {
+      "case": "auto_wrong_layout",
+      "passed": true
+    },
+    {
+      "case": "manual_word_reverse",
+      "passed": true
+    },
+    {
+      "case": "manual_word_repeat",
+      "passed": true
+    },
+    {
+      "case": "uppercase_untouched",
+      "passed": true
+    },
+    {
+      "case": "uppercase_manual",
+      "passed": true
+    },
+    {
+      "case": "explicit_exception",
+      "passed": true
+    },
+    {
+      "case": "exception_manual_override",
+      "passed": true
+    },
+    {
+      "case": "selected_paragraph",
+      "passed": true
+    },
+    {
+      "case": "selected_paragraph_reverse",
+      "passed": true
+    },
+    {
+      "case": "one_letter_manual",
+      "passed": true
+    },
+    {
+      "case": "one_letter_reverse",
+      "passed": true
+    },
+    {
+      "case": "emoji_selection",
+      "passed": true
+    },
+    {
+      "case": "emoji_selection_reverse",
+      "passed": true
+    },
+    {
+      "case": "same_role_field_transition",
+      "passed": true
+    },
+    {
+      "case": "continuous_typing_after_source_switch",
+      "passed": true
+    },
+    {
+      "case": "secure_field_blocks_processing",
+      "passed": true
+    },
+    {
+      "case": "secure_double_shift_ignored",
+      "passed": true
+    }
+  ],
+  "contains_typed_text": false,
+  "notes": [
+    "All 23 live WebKit cases pass on the final rc.8 project source.",
+    "Automatic correction, double Shift, reversal, uppercase, exceptions, selections, single letters, emoji, field transition, continuous typing and secure field pass.",
+    "The Chromium/Codex path is covered separately by codex-chromium-synthetic-2026-10-31.json.",
+    "The installed /Applications/Lado.app is rc.7; rc.8 was not built or installed.",
+    "No clipboard, network, typing history or telemetry is used."
+  ]
+}

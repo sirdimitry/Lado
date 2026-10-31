@@ -42,6 +42,19 @@ class FocusTests(unittest.TestCase):
     def focus(self):
         return self.b.check_focus()
 
+    def test_codex_is_resolved_like_other_text_fields(self):
+        # Chromium contenteditable is no longer blocked before field access:
+        # the AX path decides, and only a failed read-back may use the bounded
+        # synthetic fallback.
+        app = Mock()
+        app.processIdentifier.return_value = 424242
+        app.bundleIdentifier.return_value = "com.openai.codex"
+        self.b._frontmost = Mock(return_value=app)
+        f = self.focus()
+        self.assertEqual((f.state, f.role, f.reason), ("active", "AXTextArea", "ready"))
+        self.assertTrue(self.read.called)
+        self.a.AXUIElementCreateApplication.assert_called_once()
+
     def test_direct_field_remains_supported(self):
         f = self.focus()
         self.assertEqual((f.state, f.role, f.reason), ("active", "AXTextArea", "ready"))

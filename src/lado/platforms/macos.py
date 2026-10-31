@@ -6,7 +6,7 @@ import ctypes as C
 import os
 import threading
 import objc
-from time import monotonic
+from time import monotonic, sleep
 
 import AppKit as K
 import ApplicationServices as A
@@ -32,6 +32,26 @@ MAX_SEARCH_NODES = 240
 MAX_SEARCH_DEPTH = 12
 SEARCH_DEADLINE = 0.65
 MAX_VALUE_UNITS = 16384
+WHOLE_FIELD_EDITS_ENABLED = False
+# Chromium contenteditable accepts AX range writes but does not apply them.
+# These apps get one bounded synthetic batch only after the AX read-back fails.
+CHROMIUM_BUNDLES = {
+    "com.openai.codex", "com.openai.chat",
+    "com.google.Chrome", "com.google.Chrome.canary", "com.google.Chrome.beta",
+    "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser",
+    "com.operasoftware.Opera", "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
+    "com.github.Electron", "com.tinyspeck.slackmacgap", "notion.id", "md.obsidian",
+}
+CHROMIUM_FRAMEWORKS = (
+    "Electron Framework.framework", "Chromium Framework.framework",
+    "Codex Framework.framework", "Google Chrome Framework.framework",
+    "Microsoft Edge Framework.framework", "Brave Framework.framework",
+)
+SYNTHETIC_DELETE_LIMIT = 128
+SYNTHETIC_VERIFY_DELAY = 0.15
+# WebKit's AXTextOperation type names are not AX-prefixed. An unknown type
+# silently degrades to a select that still reports AX success.
+TEXT_OPERATION_REPLACE_PRESERVE_CASE = "TextOperationReplacePreserveCase"
 
 TEXT_ROLES = {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"}
 # Containers that can hold the real focused editor without being editors themselves.
@@ -91,6 +111,20 @@ def utf16_slice(text, start, size):
 
 def utf16_units(text):
     return len(text.encode("utf-16-le")) // 2
+
+
+def utf16_chunks(text, limit=12):
+    """Split by characters, never inside a surrogate pair."""
+    chunk, units = [], 0
+    for char in text:
+        size = utf16_units(char)
+        if chunk and units + size > limit:
+            yield "".join(chunk)
+            chunk, units = [], 0
+        chunk.append(char)
+        units += size
+    if chunk:
+        yield "".join(chunk)
 
 
 def observed_replacement(actual, expected, replacement):
@@ -376,6 +410,7 @@ class MacBackend:
         self._frontmost_app = None
         self._web_attempts = {}
         self._cached_editor = None
+        self._chromium_cache = {}
 
     # -- settings / lifecycle -------------------------------------------------
 
@@ -594,7 +629,7 @@ class MacBackend:
         return None
 
     def _value_capable(self, element):
-        if not getattr(self.settings, "value_fallback", False):
+        if not WHOLE_FIELD_EDITS_ENABLED or not getattr(self.settings, "value_fallback", False):
             return False
         return _settable(A.AXUIElementIsAttributeSettable(element, "AXValue", None))
 
@@ -859,8 +894,9 @@ class MacBackend:
         if not edit or not self._can_edit():
             self.last_replacement = "no-edit-or-stale-input"
             return False
-        # Prefer a bounded, validated AX replacement. Never erase a word with a
-        # burst of Backspace events and then hope a Unicode insertion succeeds.
+        # Prefer a bounded, validated AX replacement. Chromium contenteditable
+        # ignores those AX writes, so it alone may fall back to one bounded,
+        # tagged synthetic batch with a mandatory read-back.
         element = self.focus.element
         if element is None or not self._confirm_target(element):
             self.last_replacement = "target-changed"
@@ -873,10 +909,142 @@ class MacBackend:
         old_range = selected_range(element)
         if self._range_replacement(element, edit, observed, old_range):
             return True
-        if explicit and getattr(self.settings, "value_fallback", False):
+        if WHOLE_FIELD_EDITS_ENABLED and explicit and getattr(self.settings, "value_fallback", False):
             if self._value_replacement(element, edit, observed, old_range):
                 return True
         self.buffer.clear()
+        return False
+
+    def _verify_target(self, element):
+        """Read-only identity/security check for a just-finished edit.
+
+        The original edit deadline only governs starting a write. A read-back
+        must still be allowed after it, or a slow but successful edit would be
+        reported as a failure and the caret would be moved over changed text.
+        """
+        return (not self.disabled and not self.faulted and self.focus.state == "active"
+                and not self.sources.secure() and same_element(self.focus.element, element))
+
+    def _chromium_like(self):
+        """Chromium/Electron contenteditable is the only synthetic target."""
+        bundle = self.focus.bundle
+        if bundle in CHROMIUM_BUNDLES:
+            return True
+        cache = getattr(self, "_chromium_cache", None)
+        if cache is None:
+            cache = self._chromium_cache = {}
+        key = (self.focus.pid, bundle)
+        if key in cache:
+            return cache[key]
+        found = False
+        try:
+            app = K.NSRunningApplication.runningApplicationWithProcessIdentifier_(self.focus.pid)
+            url = app.bundleURL() if app is not None else None
+            base = url.path() if url is not None else ""
+            if base:
+                frameworks = os.path.join(base, "Contents", "Frameworks")
+                found = any(os.path.exists(os.path.join(frameworks, name))
+                            for name in CHROMIUM_FRAMEWORKS)
+        except Exception:
+            found = False
+        cache[key] = found
+        return found
+
+    def _synthetic_allowed(self, delete_text, text):
+        return (getattr(self.settings, "chromium_synthetic", True)
+                and self.focus.bundle == "com.openai.codex"
+                and self._chromium_like()
+                and 0 < len(delete_text) <= SYNTHETIC_DELETE_LIMIT
+                and 0 < len(text) <= SYNTHETIC_DELETE_LIMIT * 2
+                and not any(c in delete_text for c in "\r\n")
+                and not any(c in text for c in "\r\n")
+                and self._verify_target(self.focus.element))
+
+    def _synthetic_events(self, delete_text, text):
+        """Build the whole tagged batch before posting a single event."""
+        try:
+            source = Q.CGEventSourceCreate(Q.kCGEventSourceStatePrivate)
+        except Exception:
+            return []
+        if source is None:
+            return []
+        events = []
+        for _ in range(len(delete_text)):
+            for down in (True, False):
+                event = Q.CGEventCreateKeyboardEvent(source, 51, down)
+                if event is None:
+                    return []
+                # The double Shift fires on the second press, while Shift is
+                # still physically held. Clear flags so Backspace/Unicode are
+                # not shifted or combined with the user's modifiers.
+                Q.CGEventSetFlags(event, 0)
+                Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)
+                events.append(event)
+        for chunk in utf16_chunks(text):
+            for down in (True, False):
+                event = Q.CGEventCreateKeyboardEvent(source, 0, down)
+                if event is None:
+                    return []
+                Q.CGEventSetFlags(event, 0)
+                Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)
+                Q.CGEventKeyboardSetUnicodeString(event, utf16_units(chunk), chunk)
+                events.append(event)
+        return events
+
+    def _synthetic_focus_current(self, element):
+        """Fresh foreground and AX identity check before any global posting."""
+        try:
+            app = K.NSWorkspace.sharedWorkspace().frontmostApplication()
+            if app is None or app.processIdentifier() != self.focus.pid:
+                return False
+            # The failed AX edit's deadline may have elapsed. This is a new,
+            # read-only preflight with its own hard budget before posting.
+            previous = getattr(_ax_context, "deadline", None)
+            try:
+                _ax_context.deadline = None
+                with ax_deadline(monotonic() + 0.15):
+                    current = self.check_focus()
+            finally:
+                _ax_context.deadline = previous
+            return (current.state == "active" and current.pid == self.focus.pid
+                    and same_element(current.element, element)
+                    and self._verify_target(element))
+        except Exception:
+            return False
+
+    def _synthetic_replace(self, element, delete_text, text, start):
+        """One bounded Keyboop-style batch for Chromium contenteditable.
+
+        Chromium accepts the AX range setters but does not apply them. Events
+        are tagged with TAG so our own listen-only tap ignores them. There is
+        no retry: a failed read-back is reported, never repeated.
+        """
+        if not self._verify_target(element) or self.sources.secure():
+            self.last_replacement = "synthetic-blocked"
+            return False
+        if not self._synthetic_allowed(delete_text, text):
+            self.last_replacement = "synthetic-not-allowed"
+            return False
+        events = self._synthetic_events(delete_text, text)
+        if not events:
+            self.last_replacement = "synthetic-build-failed"
+            return False
+        # Re-check immediately before the batch; no AX calls are made in between.
+        if (not self._verify_target(element) or self.sources.secure()
+                or not self._synthetic_focus_current(element)):
+            self.last_replacement = "synthetic-aborted"
+            return False
+        for event in events:
+            Q.CGEventPost(Q.kCGHIDEventTap, event)
+        sleep(SYNTHETIC_VERIFY_DELAY)
+        state = self._read_span(element, start, text)
+        if state is True:
+            self.last_replacement = "range-replaced/synthetic-unicode"
+            return True
+        if state is None and self._verify_span(element, start, text, tries=1, delay=0.01):
+            self.last_replacement = "range-replaced/synthetic-unicode"
+            return True
+        self.last_replacement = "synthetic-unverified"
         return False
 
     def _range_replacement(self, element, edit, observed, old_range):
@@ -884,6 +1052,9 @@ class MacBackend:
         if not old_range or old_range[1] or old_range[0] < count:
             self.last_replacement = "caret-range-unavailable"
             return False
+        # Keep value-only fields out of the selection path. WebKit
+        # contenteditable reports AXSelectedText as settable even though its
+        # setter is a no-op, so it still reaches the marker operation below.
         err, writable = A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)
         if err or not writable:
             self.last_replacement = "selected-text-not-writable:" + str(int(err))
@@ -893,49 +1064,171 @@ class MacBackend:
             self.last_replacement = "selection-write-failed"
             return False
         # Read only the bounded span we already observed, never the document.
-        replacement = observed_replacement(attr(element, "AXSelectedText"), observed, edit.after)
+        # Chromium applies AXSelectedTextRange asynchronously: the range write
+        # returns success while an immediate read still returns the old caret.
+        actual = self._settle_selected(element, observed)
+        replacement = observed_replacement(actual, observed, edit.after)
         if replacement is None or not self._can_edit():
             self.last_replacement = "observed-span-mismatch"
-            if self._can_edit():
+            if self._verify_target(element):
                 set_range(element, old_range)
             return False
-        if not self._write_selected(element, replacement):
-            self.last_replacement = "selected-text-write-failed"
-            if self._can_edit():
+        if not self._write_selected(element, replacement, replacement_range[0], observed):
+            if self._verify_target(element):
                 set_range(element, old_range)
             return False
-        if not self._can_edit():
+        if not self._verify_target(element):
             self.clear()
             return True  # Replacement succeeded; do not move a now-stale caret.
-        self.last_replacement = "range-replaced"
         end = replacement_range[0] + utf16_units(replacement)
         set_range(element, (end, 0))
         self._switch(edit.target)
         return True
 
-    def _write_selected(self, element, text):
-        """Use WebKit's range operation when its selected-text setter is a no-op.
+    def _text_operation(self, element, marker, text, operation_type):
+        """Run one AXTextOperation; classify the response instead of trusting it.
 
-        The caller has already validated the bounded selection and protection.
-        Opaque markers stay inside AX; no document search or value read is used.
+        WebKit documents this contract: a replacing operation returns the
+        replacement string, while an unknown type degrades to a select and
+        returns the selected (old) text with kAXErrorSuccess.
         """
-        marker = attr(element, "AXSelectedTextMarkerRange")
-        if marker is not None and not isinstance(marker, (str, bytes, int, float, bool)) and self._can_edit():
-            set_timeout(element)
-            err, result = A.AXUIElementCopyParameterizedAttributeValue(element, "AXTextOperation", {
-                "AXTextOperationMarkerRanges": [marker],
-                "AXTextOperationType": "AXTextOperationReplace",
-                "AXTextOperationReplacementString": text,
-                "AXTextOperationSmartReplace": False,
-            }, None)
-            if err == 0:
-                self.last_replacement = "web-range-operation"
-                return bool(result)
-            # Only an explicitly unsupported operation may use the ordinary
-            # setter. An ambiguous error must not trigger a second write.
-            if err not in (A.kAXErrorAttributeUnsupported, A.kAXErrorParameterizedAttributeUnsupported):
+        set_timeout(element)
+        err, result = A.AXUIElementCopyParameterizedAttributeValue(element, "AXTextOperation", {
+            "AXTextOperationMarkerRanges": [marker],
+            "AXTextOperationType": operation_type,
+            "AXTextOperationReplacementString": text,
+            "AXTextOperationSmartReplace": False,
+        }, None)
+        if err in (A.kAXErrorAttributeUnsupported, A.kAXErrorParameterizedAttributeUnsupported,
+                   A.kAXErrorNoValue):
+            # Chromium advertises the attribute but returns no value when the
+            # operation is disabled or not understood by its current build.
+            return "unsupported", int(err)
+        if err:
+            return "error", int(err)
+        values = list(result) if isinstance(result, (list, tuple)) else []
+        if len(values) == 1 and values[0] == text:
+            return "applied", values
+        return "ignored", values
+
+    def _settle_selected(self, element, expected, tries=8, delay=0.005):
+        """Wait briefly for an asynchronous AX selection to become the span.
+
+        WebKit applies AXSelectedTextRange synchronously. Chromium applies it
+        through the renderer, so the same write can return success while an
+        immediate AXSelectedText read still describes the previous caret.
+        The wait is bounded and only happens when the first read disagrees.
+        """
+        actual = attr(element, "AXSelectedText")
+        for _ in range(tries):
+            if observed_replacement(actual, expected, expected) is not None:
+                return actual
+            if not self._verify_target(element):
+                return actual
+            sleep(delay)
+            actual = attr(element, "AXSelectedText")
+        return actual
+
+    def _verify_span(self, element, start, text, tries=8, delay=0.005):
+        """Read the exact bounded span back; AX success alone proves nothing.
+
+        Re-selecting the span once also covers editors that collapse the caret
+        after a replacement. Both the selection and the text change are
+        asynchronous on Chromium, so poll for a bounded time.
+        """
+        if start is None or not self._verify_target(element):
+            return False
+        count = utf16_units(text)
+        for _ in range(2):
+            if not set_range(element, (start, count)):
                 return False
-        return self._can_edit() and A.AXUIElementSetAttributeValue(element, "AXSelectedText", text) == 0
+            for _ in range(tries):
+                actual = attr(element, "AXSelectedText")
+                if observed_replacement(actual, text, text) is not None:
+                    return True
+                if not self._verify_target(element):
+                    return False
+                sleep(delay)
+        return False
+
+    def _read_span(self, element, start, text, tries=8, delay=0.01):
+        """Read only the replaced range via AXStringForRange.
+
+        Returns True/False when supported, or None when the parameterized
+        attribute is unavailable (the caller may use the slower selection
+        path). Unlike AXSelectedText this does not move the selection, and on
+        Chromium it returns in about a millisecond instead of timing out.
+        """
+        if start is None or not self._verify_target(element):
+            return False
+        value = A.AXValueCreate(A.kAXValueCFRangeType, (start, utf16_units(text)))
+        for _ in range(tries):
+            err, result = A.AXUIElementCopyParameterizedAttributeValue(
+                element, "AXStringForRange", value, None)
+            if err in (A.kAXErrorAttributeUnsupported, A.kAXErrorParameterizedAttributeUnsupported,
+                       A.kAXErrorNoValue):
+                return None
+            if err:
+                return None
+            if isinstance(result, str) and observed_replacement(result, text, text) is not None:
+                return True
+            if not self._verify_target(element):
+                return False
+            sleep(delay)
+        return False
+
+    def _write_selected(self, element, text, start=None, delete_text=None):
+        """Replace the validated selection and require a real read-back.
+
+        WebKit's AXSelectedText setter is a silent no-op for contenteditable
+        (AccessibilityObject::setSelectedText is empty), yet it returns
+        kAXErrorSuccess. Its AXTextOperation is the working path, provided the
+        exact type string is used and the resulting span is verified.
+        Chromium accepts both AX paths but ignores them; only that case may use
+        one bounded synthetic batch (delete_text is the exact observed span).
+        """
+        ignored = None
+        marker = attr(element, "AXSelectedTextMarkerRange")
+        if (marker is not None and not isinstance(marker, (str, bytes, int, float, bool))
+                and self._can_edit()):
+            state, detail = self._text_operation(
+                element, marker, text, TEXT_OPERATION_REPLACE_PRESERVE_CASE)
+            if state == "applied":
+                if self._verify_span(element, start, text):
+                    self.last_replacement = "range-replaced/ax-text-operation"
+                    return True
+                self.last_replacement = "text-operation-unverified"
+                return False
+            if state == "error":
+                self.last_replacement = "text-operation-error:" + str(detail)
+                return False
+            if state == "ignored":
+                # Do not retry with another operation type: older WebKit
+                # versions apply an implicit smart replace. The ordinary
+                # setter below is the only other bounded mechanism, and it is
+                # accepted only after the same read-back.
+                ignored = "text-operation-ignored"
+        if not self._can_edit():
+            if (delete_text and self._synthetic_allowed(delete_text, text)
+                    and self._synthetic_replace(element, delete_text, text, start)):
+                return True
+            self.last_replacement = ignored or "stale-before-write"
+            return False
+        if not _settable(A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)):
+            self.last_replacement = ignored or "selected-text-not-writable"
+            return False
+        if A.AXUIElementSetAttributeValue(element, "AXSelectedText", text) != 0:
+            self.last_replacement = ignored or "selected-text-write-failed"
+            return False
+        if not self._verify_span(element, start, text):
+            if delete_text and self._synthetic_allowed(delete_text, text):
+                if self._synthetic_replace(element, delete_text, text, start):
+                    return True
+                return False
+            self.last_replacement = ((ignored + "/") if ignored else "") + "selected-text-unverified"
+            return False
+        self.last_replacement = "range-replaced/ax-selected-text"
+        return True
 
     def _value_replacement(self, element, edit, observed, old_range):
         """Bounded AXValue fallback for editors that expose no writable selection.
@@ -1013,11 +1306,10 @@ class MacBackend:
             after = self.detector.converter.convert(before)
         if before == after:
             return True
-        err, settable = A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)
         changed = False
-        if err == 0 and settable and self._can_edit():
-            changed = self._write_selected(element, after)
-        if not changed and getattr(self.settings, "value_fallback", False):
+        if self._can_edit():
+            changed = self._write_selected(element, after, r[0])
+        if WHOLE_FIELD_EDITS_ENABLED and not changed and getattr(self.settings, "value_fallback", False):
             changed = self._value_selection(element, r, before, after)
         if not changed:
             self.clear()

@@ -4,9 +4,9 @@
 
 # Lado
 
-**rc.6 is an unfinished diagnostic candidate:** 145 isolated tests pass, but live WebKit replacement fails. ChatGPT compatibility is unresolved. This is not a working release. [Current result](docs/validation/webkit-0.1.1-rc.6-2026-10-31.json).
+**rc.8:** WebKit passed 23/23 live source checks. Codex gets one bounded tagged Backspace+Unicode fallback with a fresh focus preflight. Synthetic fallback is enabled only for the tested Codex target. Chromium selections are not supported. Whole-field edits are disabled. Apple Silicon; ad-hoc signed, not notarized. [Validation](docs/VALIDATION.md).
 
-> **Safety notice (2026-10-29): do not run the published 0.1.0 DMG.** A user reported loss of system responsiveness. Input safety fixes are in source; they have not yet passed a new isolated live macOS validation. See [the audit](docs/validation/safety-audit-2026-10-29.md).
+> **Safety notice (2026-10-29): do not run the published 0.1.0 DMG.** A user reported loss of system responsiveness. Current validation and remaining limitations are recorded below. See [the audit](docs/validation/safety-audit-2026-10-29.md).
 
 A small macOS menu-bar companion for typing in Russian and English. Forgot the
 layout? `ghbdtn` → `привет`. Press **Shift twice** to convert a word or a selection.
@@ -21,16 +21,9 @@ boundaries](docs/PRIVACY.md), including password-field limitations and the optio
 
 ## Status
 
-**0.1.0 is an early macOS preview**, not a claim of universal editor compatibility.
-The Apple Silicon DMG is available in [GitHub Releases](https://github.com/sirdimitry/Lado/releases).
-The shared engine, native adapter, menu-bar UI and DMG packaging are implemented.
-See [validation](docs/VALIDATION.md) for completed checks and outstanding manual
-checks. The installed app passed 19 isolated live checks in native macOS text and
-secure fields, plus 53 automated checks. Other editors still need individual
-compatibility testing. Word replacement is skipped when an editor does not support
-the required Accessibility operation. No neural model is bundled in this version: it uses compact local word
-frequency tables. A small local model will be evaluated separately against this
-baseline, including its memory cost.
+**0.1.1-rc.8 is a macOS Apple Silicon preview.** 162 isolated tests pass. Source runs passed 23/23 live WebKit checks and a separate automatic correction/double-Shift reversal check in Codex. Installed-package checks are recorded separately in [VALIDATION.md](docs/VALIDATION.md). Chromium selections are not supported; synthetic fallback is enabled only for the tested Codex target.
+
+Recognition uses compact local dictionaries, without a neural model. Universal editor compatibility is not claimed. Release 0.1.0 was withdrawn. The app is ad-hoc signed, not Apple-notarized; Windows is planned.
 
 ## What it does
 

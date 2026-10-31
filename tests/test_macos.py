@@ -131,11 +131,15 @@ class MacSafetyTests(unittest.TestCase):
             self.assertEqual(converter.convert("ghbdtn"), "привет")
             self.assertEqual(converter.convert("GHBDTN"), "ПРИВЕТ")
 
-    def test_adapter_contains_no_synthetic_event_submission(self):
+    def test_adapter_contains_only_one_tagged_synthetic_path(self):
         from pathlib import Path
         source = Path(M.__file__).read_text()
-        for forbidden in ("CGEventTapPostEvent", "CGEventPost(", "CGEventKeyboardSetUnicodeString"):
-            self.assertNotIn(forbidden, source)
+        self.assertNotIn("CGEventTapPostEvent", source)
+        # The only CGEventPost call site is the Chromium fallback, and every
+        # event it builds is tagged with TAG so our own tap ignores it.
+        self.assertEqual(source.count("CGEventPost("), 1)
+        self.assertIn("Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)", source)
+        self.assertIn("def _synthetic_replace", source)
 
     def test_unsupported_replacement_never_deletes(self):
         from lado.engine import Edit
@@ -164,13 +168,14 @@ class MacSafetyTests(unittest.TestCase):
         from lado.engine import Edit
         b = self.make_backend()
         b._switch = Mock()
+        element = b.focus.element
         with patch.object(M, "selected_range", return_value=(6,0)), \
              patch.object(M, "set_range", return_value=True) as select, \
              patch.object(M, "attr", return_value="ghbdtn"), \
              patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0,True)), \
-             patch.object(M.A, "AXUIElementSetAttributeValue", return_value=0) as write:
+             patch.object(b, "_write_selected", return_value=True) as write:
             self.assertTrue(b._replace_tail(None, Edit("ghbdtn ", "привет ", "ru"), " "))
-        self.assertEqual(write.call_args.args[2], "привет ")
+        write.assert_called_once_with(element, "привет ", 0, "ghbdtn")
         self.assertEqual(select.call_args.args[1], (7,0))
         b._switch.assert_called_once_with("ru")
 
@@ -181,7 +186,7 @@ class MacSafetyTests(unittest.TestCase):
         write = lambda element, name, new: store.__setitem__(name, new) or 0
         return store, read, write
 
-    def test_value_fallback_replaces_exact_tail(self):
+    def test_legacy_value_fallback_cannot_replace_tail(self):
         from lado.engine import Edit
         b = self.make_backend()
         b.settings.value_fallback = True
@@ -193,10 +198,10 @@ class MacSafetyTests(unittest.TestCase):
              patch.object(M, "set_range") as select, \
              patch.object(M.A, "AXUIElementIsAttributeSettable", side_effect=lambda e,n,_: (0,n == "AXValue")), \
              patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock:
-            self.assertTrue(b._replace_tail(None, Edit("ghbdtn", "привет", "ru"), explicit=True))
-        self.assertEqual(store["AXValue"], "hello привет")
-        write_mock.assert_called_once()
-        b._switch.assert_called_once_with("ru")
+            self.assertFalse(b._replace_tail(None, Edit("ghbdtn", "привет", "ru"), explicit=True))
+        self.assertEqual(store["AXValue"], "hello ghbdtn")
+        write_mock.assert_not_called()
+        b._switch.assert_not_called()
 
     def test_value_fallback_reads_nothing_beyond_cap(self):
         from lado.engine import Edit
@@ -241,7 +246,7 @@ class MacSafetyTests(unittest.TestCase):
         write.assert_not_called()
         read.assert_not_called()
 
-    def test_value_selection_replaces_only_the_selected_span(self):
+    def test_legacy_value_fallback_cannot_rewrite_selection(self):
         b = self.make_backend()
         b.settings.value_fallback = True
         element = object()
@@ -254,9 +259,9 @@ class MacSafetyTests(unittest.TestCase):
                           side_effect=lambda e, n, _: (0, n == "AXValue")), \
              patch.object(M.A, "AXUIElementSetAttributeValue", side_effect=write) as write_mock:
             self.assertTrue(b._selection(None, focus))
-        self.assertEqual(store["AXValue"], "hello привет world")
-        write_mock.assert_called_once()
-        self.assertEqual(b.selection_undo["after"], "привет")
+        self.assertEqual(store["AXValue"], "hello ghbdtn world")
+        write_mock.assert_not_called()
+        self.assertIsNone(b.selection_undo)
 
     def test_value_selection_refuses_mismatched_span(self):
         b = self.make_backend()

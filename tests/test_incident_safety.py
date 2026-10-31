@@ -111,12 +111,17 @@ class IncidentSafetyTests(unittest.TestCase):
             not c.args[1] for c in self.q.CGEventTapEnable.call_args_list),
             "A disabled flag alone leaves the active global filter connected")
 
-    def test_revoked_post_permission_does_not_post(self):
-        # Production adapter no longer submits events at all, even with permission.
+    def test_only_one_tagged_chromium_posting_path(self):
+        # The adapter has exactly one synthetic POST site, gated by the Chromium
+        # check and the chromium_synthetic preference. Every event it builds is
+        # tagged so our own listen-only tap cannot re-enter the detector.
         from pathlib import Path
         source = Path(M.__file__).read_text()
         self.assertNotIn("CGEventTapPostEvent", source)
-        self.assertNotIn("CGEventPost(", source)
+        self.assertEqual(source.count("CGEventPost("), 1)
+        self.assertIn("chromium_synthetic", source)
+        self.assertIn("def _synthetic_replace", source)
+        self.assertIn("Q.CGEventSetIntegerValueField(event, Q.kCGEventSourceUserData, TAG)", source)
 
     def test_revoked_observation_permission_precedes_field_reads(self):
         self.q.CGPreflightListenEventAccess.return_value = False
@@ -215,10 +220,20 @@ class IncidentSafetyTests(unittest.TestCase):
 
     def selection(self, text="ghbdtn", settable=True, write_error=0):
         self.b._type = Mock()
+        state = {"selected": text}
         self.a.AXUIElementIsAttributeSettable.return_value = (0, settable)
-        self.a.AXUIElementSetAttributeValue.return_value = write_error
+
+        def write(_element, name, value):
+            if write_error:
+                return write_error
+            if name == "AXSelectedText":
+                state["selected"] = value
+            return 0
+
+        self.a.AXUIElementSetAttributeValue.side_effect = write
         self.enterContext(patch.object(M, "selected_range", return_value=(0, len(text))))
-        read = self.enterContext(patch.object(M, "attr", return_value=text))
+        read = self.enterContext(patch.object(
+            M, "attr", side_effect=lambda e, n: state["selected"] if n == "AXSelectedText" else None))
         self.b._selection(None, self.b.focus)
         return read
 
@@ -259,8 +274,10 @@ class IncidentSafetyTests(unittest.TestCase):
 
     def test_supported_atomic_selection_does_not_post_keys(self):
         self.selection()
-        self.a.AXUIElementSetAttributeValue.assert_called_once_with(
-            self.b.focus.element, "AXSelectedText", "привет")
+        selected_writes = [c.args for c in self.a.AXUIElementSetAttributeValue.call_args_list
+                           if c.args[1] == "AXSelectedText"]
+        self.assertEqual(selected_writes,
+                         [(self.b.focus.element, "AXSelectedText", "привет")])
         self.b._type.assert_not_called()
 
 

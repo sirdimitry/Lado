@@ -97,3 +97,12 @@ A checked box means completed work, not a planned capability.
 - [x] Manual observer restart, permission UI and metadata-only diagnostics.
 - [x] 129 isolated checks and installed candidate packaging verification.
 - [ ] Expanded native and actual ChatGPT/Codex field validation.
+
+## rc.8 packaging — 2026-10-31
+
+- [x] WebKit strict range operation and result verification; source live suite 23/23.
+- [x] Codex bounded tagged synthetic word fallback and second-press double Shift.
+- [x] Fresh foreground PID/AX field preflight; synthetic target limited to Codex.
+- [x] 162 isolated checks, DMG build, strict signature and integrity checks.
+- [ ] Installed-package live validation after permission refresh.
+- [ ] Selected-text conversion in Chromium; other Chromium applications.

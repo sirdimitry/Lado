@@ -1,3 +1,13 @@
+# rc.8 policy (source candidate)
+
+Whole-field reads and writes remain disabled. WebKit uses the strict AX range operation with a bounded read-back. For the tested Codex contenteditable only, when the AX setter returns success but the bounded read-back proves the text did not change, Lado may send **one** bounded tagged synthetic batch: Backspaces for the exact observed word plus a Unicode replacement, at most 128 characters. Every event carries Lado's own marker, so its listen-only tap ignores it. Physical input is never suppressed, and there is no retry. Verification reads only the replaced span via `AXStringForRange`. No clipboard, typing history, network or telemetry.
+
+В rc.8 запись целого поля по-прежнему отключена. WebKit использует строгий AX-диапазон с обязательной проверкой. Только для проверенного поля Codex, если AX сообщает успех, но проверка участка доказывает, что текст не изменился, Lado может отправить **одну** ограниченную помеченную синтетическую серию: Backspace на exact-наблюдавшееся слово и Unicode-замену, не более 128 символов. Каждое событие несёт метку Lado, поэтому собственный listen-only tap его игнорирует. Физический ввод не подавляется, повторов нет. Проверка читает только заменённый участок через `AXStringForRange`. Буфера обмена, истории ввода, сети и телеметрии нет.
+
+Older candidate policies below are historical.
+
+---
+
 # Privacy / Приватность
 
 ## Русский
@@ -24,8 +34,8 @@
   точного возврата. Это не постоянная история и не журнал.
 - При замене слова дополнительно сверяется только короткий диапазон уже
   наблюдавшегося слова. Весь документ не считывается. Если редактор не поддерживает
-  безопасную замену через Accessibility, исправление слова пропускается; серии
-  удаляющих Backspace не используются.
+  безопасную замену через Accessibility, исправление слова пропускается. Исключение —
+  одна ограниченная Chromium-серия, описанная в начале этого файла.
 
 На диске: `~/Library/Application Support/Lado/settings.json` — только настройки,
 явно добавленные исключения слов и bundle ID приложений. Файл создаётся с правами
@@ -83,8 +93,8 @@ focus changes, clicks, navigation, shortcuts, pause, other layouts and after 30
 idle seconds. An existing user selection is read only on explicit double Shift, capped at 65,536
 UTF-16 code units. Only its last reversible operation is retained, for up to 30
 seconds. Word replacement validates only the bounded span already observed; it
-does not read the document. Unsupported Accessibility word replacement is skipped,
-without destructive Backspace bursts. No clipboard access is used.
+does not read the document. Unsupported Accessibility word replacement is skipped, apart from the
+single bounded Chromium fallback described at the top. No clipboard access is used.
 
 Only preferences and explicit word/app exceptions are persisted in
 `~/Library/Application Support/Lado/settings.json` (mode `0600`). Optional start at

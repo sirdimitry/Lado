@@ -152,7 +152,9 @@ class CompatibilityRunner:
             ("continuous_typing_after_source_switch", self.continuous),
             ("secure_field_blocks_processing", self.password),
         ]
-        self.next_job()
+        # WebKit exposes the AX tree before its editable selection is stable.
+        # Give the first bounded probe cycle time to settle.
+        self.later(.6, self.next_job)
 
     def next_job(self):
         if self.finished:
@@ -307,10 +309,14 @@ class CompatibilityRunner:
             return
         if self.reset():
             def change():
-                A.AXUIElementSetAttributeValue(self.second, "AXValue", "ghbdtn")
-                set_range(self.second, (6, 0))
+                # WebKit discards an AXValue write made before the field has
+                # focus. Focus first, then seed the field and Double Shift.
                 A.AXUIElementSetAttributeValue(self.second, "AXFocused", True)
-                self.later(.5, lambda: self.double_shift(check))
+                def fill():
+                    A.AXUIElementSetAttributeValue(self.second, "AXValue", "ghbdtn")
+                    set_range(self.second, (6, 0))
+                    self.later(.5, lambda: self.double_shift(check))
+                self.later(.3, fill)
             def check():
                 if not self.require_active():
                     return
@@ -332,10 +338,15 @@ class CompatibilityRunner:
         A.AXUIElementSetAttributeValue(self.secure, "AXFocused", True)
         self.later(.2, self.check_password)
 
-    def check_password(self):
+    def check_password(self, tries=12):
         if not self.require_active():
             return
         state = self.backend.refresh()
+        # WebKit can take one probe cycle to replace the previous field with
+        # the secure one; wait for the bounded poll instead of sampling once.
+        if state.state != "secure" and tries > 0:
+            self.later(.1, lambda: self.check_password(tries - 1))
+            return
         # Do not read AXValue, AXSelectedText or event characters in a secure field.
         condition = (state.state == "secure" and not self.backend.buffer.current
                      and not self.backend.buffer.words and self.backend.buffer.last_edit is None

@@ -194,7 +194,12 @@ class Buffer:
 
 
 class DoubleShift:
-    """Two press/release cycles. Typing with Shift cancels the gesture."""
+    """Two clean taps of Shift; fires on the second press (Keyboop-style).
+
+    Any ordinary key or mouse event between the taps sets ``used`` and starts a
+    new pair. The gesture is checked on press instead of waiting for release,
+    so the conversion happens as soon as the second Shift goes down.
+    """
     def __init__(self, interval=0.4):
         self.interval = interval
         self.clear()
@@ -212,20 +217,19 @@ class DoubleShift:
         if other_modifiers:
             self.clear()
             return False
-        if pressed:
-            if self.down is None:
-                self.down = now
-                self.used = False
+        if not pressed:
+            # Release only closes the physical tap. The decision is made on the
+            # next press, so a slow release does not delay the gesture.
+            self.down = None
             return False
-        if self.down is None:
-            return False
-        valid = not self.used and now - self.down <= self.interval
-        self.down = None
-        if not valid:
+        if self.down is not None:
+            return False  # already held; flagsChanged does not autorepeat
+        self.down = now
+        clean = not self.used and self.last_tap is not None and now - self.last_tap <= self.interval
+        if clean:
             self.last_tap = None
-            return False
-        if self.last_tap is not None and now - self.last_tap <= self.interval:
-            self.last_tap = None
+            self.used = True  # a third press must start a new pair
             return True
         self.last_tap = now
+        self.used = False
         return False

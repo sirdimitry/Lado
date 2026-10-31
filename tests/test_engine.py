@@ -146,26 +146,37 @@ class BufferTests(unittest.TestCase):
 
 
 class GestureTests(unittest.TestCase):
-    def test_two_clean_taps(self):
+    def test_two_clean_taps_fire_on_second_press(self):
         g = DoubleShift()
         self.assertFalse(g.update(True, 0))
         self.assertFalse(g.update(False, .05))
-        self.assertFalse(g.update(True, .15))
-        self.assertTrue(g.update(False, .2))
+        self.assertTrue(g.update(True, .15))
+        # The second press is still held; its release must not fire again.
+        self.assertFalse(g.update(False, .2))
+        self.assertFalse(g.update(True, .25))
 
     def test_shift_for_uppercase_not_gesture(self):
         g = DoubleShift()
         g.update(True, 0)
         g.key_used()
         self.assertFalse(g.update(False, .1))
-        g.update(True, .2)
+        self.assertFalse(g.update(True, .2))
         self.assertFalse(g.update(False, .3))
+
+    def test_letter_between_taps_starts_a_new_pair(self):
+        g = DoubleShift()
+        g.update(True, 0)
+        g.update(False, .05)
+        g.key_used()
+        self.assertFalse(g.update(True, .1))
+        self.assertFalse(g.update(False, .15))
+        self.assertTrue(g.update(True, .2))
 
     def test_long_hold_and_modifiers(self):
         g = DoubleShift()
         g.update(True, 0)
         self.assertFalse(g.update(False, 1))
-        g.update(True, 1.1)
+        self.assertFalse(g.update(True, 1.1))
         self.assertFalse(g.update(False, 1.2, True))
         g.update(True, 1.3)
         self.assertFalse(g.update(False, 1.4))
