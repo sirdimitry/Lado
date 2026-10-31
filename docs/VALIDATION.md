@@ -1,6 +1,6 @@
 # rc.8 package — 2026-10-31
 
-162 isolated tests pass, including fresh-focus rejection and the Codex-only synthetic gate. DMG integrity, strict ad-hoc signature and bundled self-test pass. rc.8 is installed at /Applications/Lado.app; live installed-package validation awaits refreshed macOS permission. Historical source-run results below are not a claim that this installed package has already passed.
+162 isolated tests pass, including fresh-focus rejection and the Codex-only synthetic gate. DMG integrity, strict ad-hoc signature and bundled self-test pass. rc.8 is installed at /Applications/Lado.app; installed WebKit validation passed 23/23 on the third attempt after permission refresh. The first two attempts failed at auto_wrong_layout before any replacement; cause remains unresolved. See validation/installed-0.1.1-rc.8-webkit-2026-10-31.json and validation/installed-rc8-startup-failures-2026-10-31.json. Installed Codex validation is pending the user check. Historical source-run results below are not a claim that this installed package has already passed.
 
 The synthetic fallback is enabled only for com.openai.codex. Other Chromium apps are untested and do not get synthetic replacement. Whole-field writes remain disabled.
 

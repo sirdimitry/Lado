@@ -1,0 +1,107 @@
+{
+  "contains_typed_text": false,
+  "attempts": [
+    {
+      "format": "lado-compatibility-v1",
+      "scope": "com.sirdimitry.lado-testpad",
+      "passed": false,
+      "cases": [
+        {
+          "case": "owned_fixture_running",
+          "passed": true
+        },
+        {
+          "case": "permissions",
+          "passed": true
+        },
+        {
+          "case": "event_tap_connected",
+          "passed": true
+        },
+        {
+          "case": "fixture_foreground",
+          "passed": true
+        },
+        {
+          "case": "native_test_controls",
+          "passed": true
+        },
+        {
+          "case": "single_language_indicator",
+          "passed": true
+        },
+        {
+          "case": "auto_wrong_layout",
+          "passed": false,
+          "diagnostic": {
+            "guard": "active",
+            "tap_connected": true,
+            "fixture_foreground": true,
+            "has_current_word": false,
+            "completed_words": 0,
+            "has_last_edit": false,
+            "error_type": null,
+            "focus_reason": "ready",
+            "replacement_result": "none",
+            "shift_down": false,
+            "has_shift_tap": false,
+            "queued_events": 0,
+            "has_selection_undo": false
+          }
+        }
+      ],
+      "contains_typed_text": false
+    },
+    {
+      "format": "lado-compatibility-v1",
+      "scope": "com.sirdimitry.lado-testpad",
+      "passed": false,
+      "cases": [
+        {
+          "case": "owned_fixture_running",
+          "passed": true
+        },
+        {
+          "case": "permissions",
+          "passed": true
+        },
+        {
+          "case": "event_tap_connected",
+          "passed": true
+        },
+        {
+          "case": "fixture_foreground",
+          "passed": true
+        },
+        {
+          "case": "native_test_controls",
+          "passed": true
+        },
+        {
+          "case": "single_language_indicator",
+          "passed": true
+        },
+        {
+          "case": "auto_wrong_layout",
+          "passed": false,
+          "diagnostic": {
+            "guard": "active",
+            "tap_connected": true,
+            "fixture_foreground": true,
+            "has_current_word": false,
+            "completed_words": 1,
+            "has_last_edit": false,
+            "error_type": null,
+            "focus_reason": "ready",
+            "replacement_result": "none",
+            "shift_down": false,
+            "has_shift_tap": false,
+            "queued_events": 0,
+            "has_selection_undo": false
+          }
+        }
+      ],
+      "contains_typed_text": false
+    }
+  ]
+}

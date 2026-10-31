@@ -106,3 +106,6 @@ A checked box means completed work, not a planned capability.
 - [x] 162 isolated checks, DMG build, strict signature and integrity checks.
 - [ ] Installed-package live validation after permission refresh.
 - [ ] Selected-text conversion in Chromium; other Chromium applications.
+
+- [x] Installed rc.8: WebKit 23/23 on third attempt; two startup failures preserved.
+- [ ] Installed Codex check; unresolved initial test input loss.
