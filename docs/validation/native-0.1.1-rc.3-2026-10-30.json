@@ -1,0 +1,100 @@
+{
+  "format": "lado-compatibility-v1",
+  "scope": "com.sirdimitry.lado-testpad",
+  "passed": true,
+  "cases": [
+    {
+      "case": "owned_fixture_running",
+      "passed": true
+    },
+    {
+      "case": "permissions",
+      "passed": true
+    },
+    {
+      "case": "event_tap_connected",
+      "passed": true
+    },
+    {
+      "case": "fixture_foreground",
+      "passed": true
+    },
+    {
+      "case": "native_test_controls",
+      "passed": true
+    },
+    {
+      "case": "single_language_indicator",
+      "passed": true
+    },
+    {
+      "case": "auto_wrong_layout",
+      "passed": true
+    },
+    {
+      "case": "manual_word_reverse",
+      "passed": true
+    },
+    {
+      "case": "manual_word_repeat",
+      "passed": true
+    },
+    {
+      "case": "uppercase_untouched",
+      "passed": true
+    },
+    {
+      "case": "uppercase_manual",
+      "passed": true
+    },
+    {
+      "case": "explicit_exception",
+      "passed": true
+    },
+    {
+      "case": "exception_manual_override",
+      "passed": true
+    },
+    {
+      "case": "selected_paragraph",
+      "passed": true
+    },
+    {
+      "case": "selected_paragraph_reverse",
+      "passed": true
+    },
+    {
+      "case": "one_letter_manual",
+      "passed": true
+    },
+    {
+      "case": "one_letter_reverse",
+      "passed": true
+    },
+    {
+      "case": "emoji_selection",
+      "passed": true
+    },
+    {
+      "case": "emoji_selection_reverse",
+      "passed": true
+    },
+    {
+      "case": "same_role_field_transition",
+      "passed": true
+    },
+    {
+      "case": "continuous_typing_after_source_switch",
+      "passed": true
+    },
+    {
+      "case": "secure_field_blocks_processing",
+      "passed": true
+    },
+    {
+      "case": "secure_double_shift_ignored",
+      "passed": true
+    }
+  ],
+  "contains_typed_text": false
+}

@@ -37,7 +37,89 @@ class RegressionTests(unittest.TestCase):
         b._can_edit = Mock(return_value=True)
         b._edit_target_is_text = Mock(return_value=True)
         b._confirm_target = Mock(return_value=True)
+        b.sources = Mock()
+        b.sources.secure.return_value = False
+        b.input_serial = 1
+        b.drain_pending = False
+        b.defer = Mock()
         return b
+
+    def queue_event(self, b, kind):
+        event = M.Q.CGEventCreateKeyboardEvent(None, 56, True)
+        b.events.append((monotonic(), b.epoch, b.focus, kind, event))
+        b._process = Mock()
+
+    def test_webkit_nbsp_keeps_exact_word_and_separator(self):
+        self.assertEqual(M.observed_replacement("ghbdtn\u00a0", "ghbdtn ", "привет "), "привет\u00a0")
+        self.assertEqual(M.observed_replacement("ghbdtn ", "ghbdtn ", "привет "), "привет ")
+
+    def test_webkit_uses_exact_marker_range_operation(self):
+        b = self.backend()
+        marker, element = object(), object()
+        with patch.object(M, "attr", return_value=marker), patch.object(M, "set_timeout"), \
+             patch.object(M.A, "AXUIElementCopyParameterizedAttributeValue", return_value=(0, ["привет"])) as operation, \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as setter:
+            self.assertTrue(b._write_selected(element, "привет"))
+        args = operation.call_args.args
+        self.assertEqual(args[1], "AXTextOperation")
+        self.assertEqual(args[2]["AXTextOperationMarkerRanges"], [marker])
+        self.assertFalse(args[2]["AXTextOperationSmartReplace"])
+        setter.assert_not_called()
+
+    def test_ambiguous_marker_write_never_retries_with_other_setter(self):
+        b = self.backend()
+        with patch.object(M, "attr", return_value=object()), patch.object(M, "set_timeout"), \
+             patch.object(M.A, "AXUIElementCopyParameterizedAttributeValue", return_value=(-25204, None)), \
+             patch.object(M.A, "AXUIElementSetAttributeValue") as setter:
+            self.assertFalse(b._write_selected(object(), "привет"))
+        setter.assert_not_called()
+
+    def test_webkit_space_tolerance_does_not_relax_word_validation(self):
+        for actual in ("ghbdtm\u00a0", "Ghbdtn\u00a0", "ghbdtn\t", "ghbdtn\u202f", None):
+            self.assertIsNone(M.observed_replacement(actual, "ghbdtn ", "привет "))
+
+    def test_nbsp_range_replacement_preserves_webkit_separator(self):
+        b = self.backend()
+        b._switch = Mock()
+        element = object()
+        with patch.object(M.A, "AXUIElementIsAttributeSettable", return_value=(0, True)), \
+             patch.object(M, "set_range", return_value=True), \
+             patch.object(M, "attr", return_value="ghbdtn\u00a0"), \
+             patch.object(M.A, "AXUIElementSetAttributeValue", return_value=0) as write:
+            self.assertTrue(b._range_replacement(element, Edit("ghbdtn ", "привет ", "ru"), "ghbdtn ", (7, 0)))
+        write.assert_called_once_with(element, "AXSelectedText", "привет\u00a0")
+
+    def test_first_shift_is_not_lost_when_only_layout_changed(self):
+        b = self.backend()
+        element = object()
+        b.focus = M.Focus("active", 123, "example", element, "ru", "AXTextArea")
+        b._probe_focus = M.Focus("active", 123, "example", element, "en", "AXTextArea")
+        self.queue_event(b, M.Q.kCGEventFlagsChanged)
+        b.drain_events()
+        b._process.assert_called_once()
+
+    def test_character_from_old_layout_is_still_discarded(self):
+        b = self.backend()
+        element = object()
+        b.focus = M.Focus("active", 123, "example", element, "ru", "AXTextArea")
+        b._probe_focus = M.Focus("active", 123, "example", element, "en", "AXTextArea")
+        self.queue_event(b, M.Q.kCGEventKeyDown)
+        b.drain_events()
+        b._process.assert_not_called()
+
+    def test_brief_probe_transition_defers_instead_of_losing_first_event(self):
+        b = self.backend()
+        b.focus = b._probe_focus = M.Focus("active", 123, "example", object(), "en", "AXTextArea")
+        b._probe_at = monotonic() - 0.1
+        b.focus_required = monotonic()
+        self.queue_event(b, M.Q.kCGEventFlagsChanged)
+        b.drain_events()
+        b._process.assert_not_called()
+        self.assertEqual(len(b.events), 1)
+        self.assertTrue(b.drain_pending)
+        b._probe_at = monotonic()
+        b.drain_events()
+        b._process.assert_called_once()
 
     def test_two_fields_of_same_type_clear_context(self):
         b = self.backend()

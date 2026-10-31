@@ -342,6 +342,7 @@ class LadoDelegate(N.NSObject):
             t("Последняя ошибка: ", "Last error: ") + (self.backend.last_error or "—"),
             "AX timeout: " + str(AX_TIMEOUT),
             "AX error code: " + str(self.backend.last_ax_error),
+            "Last replacement: " + getattr(self.backend, "last_replacement", "none"),
             "",
             t("Раскладки: ", "Layouts: ") + layouts,
             t("Настройки: авто=%s, обновления=%s, двойной Shift=%s мс, исключений=%s, слов=%s, value-fallback=%s",

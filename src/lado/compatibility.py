@@ -65,6 +65,12 @@ class CompatibilityRunner:
                 "completed_words": len(self.backend.buffer.words),
                 "has_last_edit": self.backend.buffer.last_edit is not None,
                 "error_type": getattr(self.backend, "last_error", None),
+                "focus_reason": self.backend.focus.reason,
+                "replacement_result": getattr(self.backend, "last_replacement", "none"),
+                "shift_down": self.backend.gesture.down is not None,
+                "has_shift_tap": self.backend.gesture.last_tap is not None,
+                "queued_events": len(self.backend.events),
+                "has_selection_undo": self.backend.selection_undo is not None,
             }
         self.results.append(result)
         if not condition:
@@ -104,7 +110,8 @@ class CompatibilityRunner:
     def find(self, node, identifier, remaining=400):
         if remaining <= 0:
             return None
-        if str(attr(node, "AXIdentifier") or "") == identifier:
+        if (str(attr(node, "AXIdentifier") or "") == identifier
+                or str(attr(node, "AXDOMIdentifier") or "") == identifier):
             return node
         for child in list(attr(node, "AXChildren") or [])[:100]:
             found = self.find(child, identifier, remaining - 1)
@@ -161,7 +168,10 @@ class CompatibilityRunner:
     def check_text(self, expected):
         if not self.require_active():
             return
-        if self.record(self.current_case, str(attr(self.plain, "AXValue") or "") == expected):
+        # contenteditable represents trailing typed spaces as NBSP. Compare
+        # visible text while keeping letter and paragraph checks exact.
+        actual = str(attr(self.plain, "AXValue") or "").replace("\u00a0", " ")
+        if self.record(self.current_case, actual == expected):
             self.later(.1, self.next_job)
 
     def reset(self, initial=""):

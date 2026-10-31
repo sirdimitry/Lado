@@ -93,6 +93,22 @@ def utf16_units(text):
     return len(text.encode("utf-16-le")) // 2
 
 
+def observed_replacement(actual, expected, replacement):
+    """Keep WebKit's space representation without relaxing letter matching."""
+    if actual == expected:
+        return replacement
+    if not isinstance(actual, str) or len(actual) != len(expected) or len(replacement) != len(expected):
+        return None
+    result = list(replacement)
+    for i, (found, wanted) in enumerate(zip(actual, expected)):
+        if found == wanted:
+            continue
+        if found != "\u00a0" or wanted != " " or replacement[i] != " ":
+            return None
+        result[i] = found
+    return "".join(result)
+
+
 def _settable(result):
     """Normalise PyObjC's (error, bool) tuple and tolerate plain booleans."""
     if isinstance(result, tuple):
@@ -105,6 +121,8 @@ class InputSources:
     """Small ctypes bridge to Apple's Text Input Source Services."""
 
     def __init__(self):
+        self._current_id = ""
+        self._secure_input = False
         self.carbon = C.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
         self.cf = C.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
         for lib, name, result, args in [
@@ -129,7 +147,15 @@ class InputSources:
         self.carbon.LMGetKbdType.restype = C.c_uint8
 
     def prop(self, source, name):
+        self._require_main_thread()
         return self.carbon.TISGetInputSourceProperty(source, C.c_void_p.in_dll(self.carbon, name))
+
+    @staticmethod
+    def _require_main_thread():
+        # HIToolbox aborts (not a catchable Python exception) when a changed
+        # source list is validated from a worker on recent macOS versions.
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("input-sources-require-main-thread")
 
     def string(self, value):
         if not value:
@@ -138,15 +164,20 @@ class InputSources:
         return buf.value.decode("utf-8") if self.cf.CFStringGetCString(value, buf, len(buf), UTF8) else ""
 
     def current(self):
+        if threading.current_thread() is not threading.main_thread():
+            return self._current_id
         source = self.carbon.TISCopyCurrentKeyboardInputSource()
         if not source:
+            self._current_id = ""
             return ""
         try:
-            return self.string(self.prop(source, "kTISPropertyInputSourceID"))
+            self._current_id = self.string(self.prop(source, "kTISPropertyInputSourceID"))
+            return self._current_id
         finally:
             self.cf.CFRelease(source)
 
     def all(self):
+        self._require_main_thread()
         sources = self.carbon.TISCreateInputSourceList(None, False)
         result = []
         if not sources:
@@ -167,6 +198,7 @@ class InputSources:
             self.cf.CFRelease(sources)
 
     def _with_source(self, source_id, operation):
+        self._require_main_thread()
         sources = self.carbon.TISCreateInputSourceList(None, False)
         if not sources:
             return None
@@ -215,7 +247,9 @@ class InputSources:
         return LayoutConverter(pairs)
 
     def secure(self):
-        return bool(self.carbon.IsSecureEventInputEnabled())
+        if threading.current_thread() is threading.main_thread():
+            self._secure_input = bool(self.carbon.IsSecureEventInputEnabled())
+        return self._secure_input
 
 
 class AccessibilityAccessError(RuntimeError):
@@ -256,6 +290,22 @@ def selected_range(element):
     return tuple(pair) if ok else None
 
 
+def children(element, limit=80):
+    """Bound the remote array itself, rather than copying every child first."""
+    set_timeout(element)
+    err, count = A.AXUIElementGetAttributeValueCount(element, "AXChildren", None)
+    if err == A.kAXErrorAPIDisabled:
+        raise AccessibilityAccessError()
+    if err or count <= 0:
+        return []
+    set_timeout(element)
+    err, values = A.AXUIElementCopyAttributeValues(
+        element, "AXChildren", 0, min(int(count), limit), None)
+    if err == A.kAXErrorAPIDisabled:
+        raise AccessibilityAccessError()
+    return list(values or [])[:limit] if err == 0 else []
+
+
 def set_range(element, pair):
     value = A.AXValueCreate(A.kAXValueCFRangeType, pair)
     return A.AXUIElementSetAttributeValue(element, "AXSelectedTextRange", value) == 0
@@ -278,6 +328,8 @@ class MacBackend:
         self.settings, self.notify, self.defer = settings, notify, defer
         self.test_bundle = test_bundle
         self.sources = InputSources()
+        self._source_id = self.sources.current()
+        self.sources.secure()
         installed = self.sources.all()
         ids = {s["id"] for s in installed}
         for field, lang in (("english_source", "en"), ("russian_source", "ru")):
@@ -299,6 +351,7 @@ class MacBackend:
         self.disabled = False
         self.last_error = None
         self.last_ax_error = 0
+        self.last_replacement = "none"
         self.faulted = False
         self.events = deque(maxlen=16)
         self.drain_pending = False
@@ -441,6 +494,7 @@ class MacBackend:
 
     def check_focus(self):
         _ax_context.error = None
+        self.last_ax_error = 0
         try:
             result = self._check_focus()
             error = _ax_context.error
@@ -511,15 +565,20 @@ class MacBackend:
                 retry = self.resolve_focus(element, pid, bundle, sid)
                 if retry.state in ("active", "secure"):
                     return retry
+                if retry.role in TEXT_ROLES:
+                    focus = retry
             cached = getattr(self, "_cached_editor", None)
             if cached and cached[0] == pid and attr(cached[1], "AXFocused") is True:
                 resolved = self.resolve_focus(cached[1], pid, bundle, sid)
                 if resolved.state in ("active", "secure"):
                     return resolved
             searched = self._search_focused(app_ax, pid, bundle, sid)
-            if searched is not None and searched.state in ("active", "secure"):
-                self._cached_editor = (pid, searched.element) if searched.state == "active" else None
-                return searched
+            if searched is not None:
+                if searched.state in ("active", "secure"):
+                    self._cached_editor = (pid, searched.element) if searched.state == "active" else None
+                    return searched
+                if searched.role in TEXT_ROLES:
+                    focus = searched
         return focus
 
     def _focused_node(self, app_ax):
@@ -626,12 +685,13 @@ class MacBackend:
         """
         start = attr(app_ax, "AXFocusedWindow") or app_ax
         set_timeout(start)
-        queue = [(start, 0)]
+        queue = deque([(start, 0)])
         seen = set()
+        unsupported = None
         deadline = monotonic() + SEARCH_DEADLINE
         budget = MAX_SEARCH_NODES
         while queue and budget > 0 and monotonic() < deadline:
-            node, depth = queue.pop(0)
+            node, depth = queue.popleft()
             key = self._node_key(node)
             if key in seen:
                 continue
@@ -642,21 +702,29 @@ class MacBackend:
                 resolved = self.resolve_focus(node, pid, bundle, sid)
                 if resolved.state in ("active", "secure"):
                     return resolved
+                if resolved.role in TEXT_ROLES:
+                    unsupported = resolved
             if role in TEXT_ROLES:
                 continue
             if role not in CONTAINER_ROLES or depth >= MAX_SEARCH_DEPTH:
                 continue
-            children = attr(node, "AXChildren") or []
-            try:
-                children = list(children)[:80]
-            except Exception:
-                children = []
-            for child in children:
+            for child in children(node):
                 set_timeout(child)
                 queue.append((child, depth + 1))
-        return None
+        return unsupported
 
     def refresh(self):
+        # Only the main run loop talks to Text Input Source Services. Workers
+        # consume its string snapshot; AX RPC remains on the probe thread.
+        if hasattr(self, "_source_id"):
+            sid = self.sources.current()
+            if sid != self._source_id:
+                self._source_id = sid
+                with self._probe_lock:
+                    self._focus_generation += 1
+                    self.focus_required = monotonic()
+                self._wake_probe()
+            self.sources.secure()
         focus, at = self._snapshot()
         if focus is None:
             if getattr(self, "_probe_lock", None) is None:
@@ -669,7 +737,11 @@ class MacBackend:
             else:
                 focus = Focus("unsupported", reason="probe-starting")
         elif (monotonic() - at > 1.0 or at < getattr(self, "focus_required", 0.0)):
-            focus = Focus("unsupported", layout=focus.layout, reason="probe-stale")
+            # Keep the old field identity for queued native event copies until
+            # the fresh probe arrives. Never decode or edit using this snapshot.
+            self.focus_checked = at
+            return Focus("unsupported", focus.pid, focus.bundle, layout=focus.layout,
+                         role=focus.role, reason="probe-stale")
         self.focus_checked = at
         old = self.focus
         # Compare semantic identity, not object identity: web editors often
@@ -785,11 +857,13 @@ class MacBackend:
 
     def _replace_tail(self, proxy, edit, pending_separator="", explicit=False):
         if not edit or not self._can_edit():
+            self.last_replacement = "no-edit-or-stale-input"
             return False
         # Prefer a bounded, validated AX replacement. Never erase a word with a
         # burst of Backspace events and then hope a Unicode insertion succeeds.
         element = self.focus.element
         if element is None or not self._confirm_target(element):
+            self.last_replacement = "target-changed"
             self.buffer.clear()
             return False
         observed = edit.before[:-len(pending_separator)] if pending_separator else edit.before
@@ -808,29 +882,60 @@ class MacBackend:
     def _range_replacement(self, element, edit, observed, old_range):
         count = utf16_units(observed)
         if not old_range or old_range[1] or old_range[0] < count:
+            self.last_replacement = "caret-range-unavailable"
             return False
         err, writable = A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)
         if err or not writable:
+            self.last_replacement = "selected-text-not-writable:" + str(int(err))
             return False
         replacement_range = (old_range[0] - count, count)
         if not self._can_edit() or not set_range(element, replacement_range):
+            self.last_replacement = "selection-write-failed"
             return False
         # Read only the bounded span we already observed, never the document.
-        if attr(element, "AXSelectedText") != observed or not self._can_edit():
+        replacement = observed_replacement(attr(element, "AXSelectedText"), observed, edit.after)
+        if replacement is None or not self._can_edit():
+            self.last_replacement = "observed-span-mismatch"
             if self._can_edit():
                 set_range(element, old_range)
             return False
-        if A.AXUIElementSetAttributeValue(element, "AXSelectedText", edit.after) != 0:
+        if not self._write_selected(element, replacement):
+            self.last_replacement = "selected-text-write-failed"
             if self._can_edit():
                 set_range(element, old_range)
             return False
         if not self._can_edit():
             self.clear()
             return True  # Replacement succeeded; do not move a now-stale caret.
-        end = replacement_range[0] + utf16_units(edit.after)
+        self.last_replacement = "range-replaced"
+        end = replacement_range[0] + utf16_units(replacement)
         set_range(element, (end, 0))
         self._switch(edit.target)
         return True
+
+    def _write_selected(self, element, text):
+        """Use WebKit's range operation when its selected-text setter is a no-op.
+
+        The caller has already validated the bounded selection and protection.
+        Opaque markers stay inside AX; no document search or value read is used.
+        """
+        marker = attr(element, "AXSelectedTextMarkerRange")
+        if marker is not None and not isinstance(marker, (str, bytes, int, float, bool)) and self._can_edit():
+            set_timeout(element)
+            err, result = A.AXUIElementCopyParameterizedAttributeValue(element, "AXTextOperation", {
+                "AXTextOperationMarkerRanges": [marker],
+                "AXTextOperationType": "AXTextOperationReplace",
+                "AXTextOperationReplacementString": text,
+                "AXTextOperationSmartReplace": False,
+            }, None)
+            if err == 0:
+                self.last_replacement = "web-range-operation"
+                return bool(result)
+            # Only an explicitly unsupported operation may use the ordinary
+            # setter. An ambiguous error must not trigger a second write.
+            if err not in (A.kAXErrorAttributeUnsupported, A.kAXErrorParameterizedAttributeUnsupported):
+                return False
+        return self._can_edit() and A.AXUIElementSetAttributeValue(element, "AXSelectedText", text) == 0
 
     def _value_replacement(self, element, edit, observed, old_range):
         """Bounded AXValue fallback for editors that expose no writable selection.
@@ -911,7 +1016,7 @@ class MacBackend:
         err, settable = A.AXUIElementIsAttributeSettable(element, "AXSelectedText", None)
         changed = False
         if err == 0 and settable and self._can_edit():
-            changed = A.AXUIElementSetAttributeValue(element, "AXSelectedText", after) == 0
+            changed = self._write_selected(element, after)
         if not changed and getattr(self.settings, "value_fallback", False):
             changed = self._value_selection(element, r, before, after)
         if not changed:
@@ -968,6 +1073,7 @@ class MacBackend:
             self.sources.select(sid)
             # This source change belongs to our own edit and does not invalidate its undo.
             self.focus.layout = self.sources.current()
+            self._source_id = self.focus.layout
             lock = getattr(self, "_probe_lock", None)
             if lock is not None:
                 with lock:
@@ -1032,15 +1138,25 @@ class MacBackend:
             return
         try:
             focus = self.refresh()  # Uses the background snapshot; no UI-thread AX IPC.
+            if focus.reason in ("probe-stale", "probe-starting"):
+                if monotonic() - batch[0][0] <= 0.25:
+                    self.events.extendleft(reversed(batch))
+                    self.drain_pending = True
+                    self._wake_probe()
+                    self.defer(self.drain_events, 0.01)
+                else:
+                    self.clear()
+                return
             if focus.state != "active":
                 return
             if self.focus_checked + 0.001 < getattr(self, "focus_required", 0.0):
                 self.clear()
                 return
             for i, (created, epoch, captured, kind, event) in enumerate(batch):
-                if (monotonic() - created > 0.25 or epoch != self.epoch
+                flags_only = kind == Q.kCGEventFlagsChanged
+                if (monotonic() - created > 0.25 or (epoch != self.epoch and not flags_only)
                         or captured.pid != focus.pid or not same_element(captured.element, focus.element)
-                        or captured.layout != focus.layout or self.sources.secure()):
+                        or (captured.layout != focus.layout and not flags_only) or self.sources.secure()):
                     self.clear()
                     return
                 self.edit_serial = serial
@@ -1048,7 +1164,7 @@ class MacBackend:
                 with ax_deadline(self.edit_deadline):
                     self._process(kind, event, focus, i == len(batch) - 1)
                 # Processing can clear context or change layout intentionally.
-                if i != len(batch) - 1 and self.epoch != epoch:
+                if i != len(batch) - 1 and self.epoch != epoch and not flags_only:
                     self.clear()
                     return
         except AXDeadlineExceeded:

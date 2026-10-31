@@ -1,3 +1,27 @@
+# Current candidate — 2026-10-31
+
+rc.6 passes 145 isolated tests and packaging checks. Live WebKit automatic correction FAILS despite granted permissions, an active field and successful AX write responses. Do not claim ChatGPT compatibility or publish this as a working release. The earlier AppKit passes below do not cover this defect.
+
+The diagnostic fixture launched with `--keep-open` on 2026-10-30 was terminated on 2026-10-31; its normal-close binary was restored before subsequent checks. Temporary test app bundles were removed after checks.
+
+The TIS background-thread crash was traced to four macOS crash reports. Source queries now run on the main thread; probes consume cached source IDs.
+
+---
+
+# Current candidate — 2026-10-30
+
+**0.1.1-rc.3** passes 132 isolated checks and 23 live native AppKit cases.
+The installed binary, packaged source modules, code signature and DMG were checked.
+See [current native report](validation/native-0.1.1-rc.3-2026-10-30.json).
+
+The user still reports no correction in ChatGPT/Codex. This is an unresolved
+compatibility defect, not covered by the passing AppKit tests. No universal
+editor support or resolution of the ChatGPT field is claimed.
+
+The records below concern earlier candidates and are historical.
+
+---
+
 # Current safety status — 2026-10-29
 
 The published 0.1.0 DMG was followed by a reported system freeze. Its historical

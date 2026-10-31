@@ -25,6 +25,7 @@ class FocusTests(unittest.TestCase):
         self.attrs = {(self.app, "AXFocusedUIElement"): self.field,
                       (self.field, "AXRole"): "AXTextArea"}
         self.read = self.enterContext(patch.object(M, "attr", side_effect=lambda e, n: self.attrs.get((e, n))))
+        self.enterContext(patch.object(M, "children", side_effect=lambda e: self.attrs.get((e, "AXChildren"), [])))
         self.ranges = self.enterContext(patch.object(M, "selected_range", return_value=(0, 0)))
         self.a = self.enterContext(patch.object(M, "A", Mock()))
         self.a.AXIsProcessTrusted.return_value = True
@@ -180,6 +181,22 @@ class FocusTests(unittest.TestCase):
         self.assertNotIn("AXValue", names)
         self.assertNotIn("AXSelectedText", names)
         self.assertNotIn("AXSelectedTextRange", names)
+
+    def test_search_retains_focused_field_without_selection_support(self):
+        window = object()
+        self.attrs[self.app, "AXFocusedUIElement"] = None
+        self.attrs[self.app, "AXFocusedWindow"] = window
+        self.attrs[window, "AXRole"] = "AXWindow"
+        self.attrs[window, "AXChildren"] = [self.field]
+        self.attrs[self.field, "AXFocused"] = True
+        self.ranges.return_value = None
+        f = self.focus()
+        self.assertEqual((f.role, f.reason), ("AXTextArea", "selection-range-unavailable"))
+
+    def test_success_clears_previous_ax_error(self):
+        self.b.last_ax_error = -25204
+        self.assertEqual(self.focus().state, "active")
+        self.assertEqual(self.b.last_ax_error, 0)
 
 
 if __name__ == "__main__":
