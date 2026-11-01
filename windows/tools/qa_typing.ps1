@@ -1,4 +1,4 @@
-# End-to-end check of the Windows build: real global hook, real SendInput.
+﻿# End-to-end check of the Windows build: real global hook, real SendInput.
 #
 # WARNING: this briefly takes the foreground (about 8 seconds). Do not run it
 # while playing a fullscreen game or during a call.
