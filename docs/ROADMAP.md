@@ -67,10 +67,11 @@ A checked box means completed work, not a planned capability.
 
 ## Этап 6 · Windows
 
-- [ ] Адаптер клавиатуры и раскладок Win32 при сохранении общего ядра.
-- [ ] Защита парольных полей и взаимодействие с UI Automation.
-- [ ] Трей, настройки и About в стиле Windows.
+- [x] Адаптер клавиатуры и раскладок Win32 при сохранении общего ядра.
+- [x] Защита парольных полей и взаимодействие с UI Automation.
+- [x] Трей, настройки и About в стиле Windows.
 - [ ] Проверки совместимости и установщик.
+- [x] Native C++/Win32 сборка в `windows/` (ветка `windows-native`), см. [WINDOWS.md](WINDOWS.md).
 
 ## Этап 7 · Стабильная версия / stable release
 

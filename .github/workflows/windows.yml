@@ -1,0 +1,38 @@
+name: Windows
+
+on:
+  push:
+    branches: [main, windows-native]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (MSVC)
+        run: cmake -S windows -B windows/build -A x64
+
+      - name: Build
+        run: cmake --build windows/build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir windows/build -C Release --output-on-failure
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lado-windows-x64
+          path: windows/build/Release/Lado.exe
+          if-no-files-found: error

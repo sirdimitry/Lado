@@ -10,7 +10,8 @@
 
 A small macOS menu-bar companion for typing in Russian and English. Forgot the
 layout? `ghbdtn` → `привет`. Press **Shift twice** to convert a word or a selection.
-Built with Python and native macOS interfaces. Windows support is planned.
+Built with Python and native macOS interfaces. A native Windows build is
+available in [`windows/`](windows/README.md).
 
 **Local text processing. No typing history. No telemetry. No accounts. No subscription.**
 
@@ -19,11 +20,20 @@ context exists in RAM to make corrections possible. Only your preferences and
 explicitly added personal exceptions are saved. See [the exact privacy
 boundaries](docs/PRIVACY.md), including password-field limitations and the optional GitHub update check.
 
+## Windows (native preview)
+
+The preview native Windows build lives in [`windows/`](windows/README.md):
+C++20 and the Win32 API only, no Python runtime, one portable `Lado.exe`.
+It covers automatic correction, double Shift for the last word, the RU/EN tray
+indicator, word/app exceptions, Pause and start with Windows. Selected-text
+conversion and update checks are not implemented yet; details and limitations
+are in [the Windows notes](docs/WINDOWS.md).
+
 ## Status
 
 **0.1.1-rc.8 is a macOS Apple Silicon preview.** 162 isolated tests pass. Source runs passed 23/23 live WebKit checks and a separate automatic correction/double-Shift reversal check in Codex. Installed-package checks are recorded separately in [VALIDATION.md](docs/VALIDATION.md). Chromium selections are not supported; synthetic fallback is enabled only for the tested Codex target.
 
-Recognition uses compact local dictionaries, without a neural model. Universal editor compatibility is not claimed. Release 0.1.0 was withdrawn. The app is ad-hoc signed, not Apple-notarized; Windows is planned.
+Recognition uses compact local dictionaries, without a neural model. Universal editor compatibility is not claimed. Release 0.1.0 was withdrawn. The app is ad-hoc signed, not Apple-notarized; the Windows preview is a separate native build.
 
 ## What it does
 
