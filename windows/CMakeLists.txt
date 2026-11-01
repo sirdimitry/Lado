@@ -61,6 +61,12 @@ if(MINGW)
   target_link_options(Lado PRIVATE -municode -static -static-libgcc -static-libstdc++)
 endif()
 
+if(MSVC)
+  # resources.rc already embeds ID 1 / type 24; the linker would add a second
+  # auto-generated manifest and CVTRES rejects the duplicate.
+  target_link_options(Lado PRIVATE /MANIFEST:NO)
+endif()
+
 add_executable(lado_tests tests/test_main.cpp)
 target_link_libraries(lado_tests PRIVATE lado_core)
 target_compile_definitions(lado_tests PRIVATE
