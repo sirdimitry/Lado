@@ -9,6 +9,7 @@
 #include <chrono>
 #include <iterator>
 #include <string>
+#include <utility>
 
 #include "log.h"
 
@@ -26,6 +27,11 @@ constexpr GUID kClsidCUIAutomation = {
 constexpr GUID kIidIUIAutomation = {
     0x30cbe57d, 0xd9d0, 0x452a,
     {0xab, 0x13, 0x7a, 0xc5, 0xac, 0x48, 0x25, 0xee}};
+constexpr GUID kIidTextPattern = {
+    0x32eba289, 0x3583, 0x42c9,
+    {0x9c, 0x59, 0x3b, 0x6d, 0x9a, 0x1e, 0x9b, 0x6a}};
+
+constexpr size_t kSelectionMaxChars = 500;
 
 // Cheap native check first: a focused classic Edit with ES_PASSWORD.
 bool classic_password_focus(HWND foreground) {
@@ -36,7 +42,8 @@ bool classic_password_focus(HWND foreground) {
   if (!GetGUIThreadInfo(thread, &info) || info.hwndFocus == nullptr) return false;
 
   wchar_t class_name[64] = {};
-  if (GetClassNameW(info.hwndFocus, class_name, static_cast<int>(std::size(class_name))) == 0) {
+  if (GetClassNameW(info.hwndFocus, class_name,
+                    static_cast<int>(std::size(class_name))) == 0) {
     return false;
   }
   if (_wcsicmp(class_name, L"Edit") != 0) return false;
@@ -59,6 +66,89 @@ bool uia_password_focus(IUIAutomation* automation) {
   VariantClear(&value);
   element->Release();
   return secure;
+}
+
+SelectionResult query_selection(IUIAutomation* automation) {
+  SelectionResult result;
+  if (automation == nullptr) return result;
+
+  const HWND foreground = GetForegroundWindow();
+  if (foreground == nullptr) return result;
+  // Never read from a password field, including the classic path.
+  if (classic_password_focus(foreground)) return result;
+
+  DWORD foreground_pid = 0;
+  GetWindowThreadProcessId(foreground, &foreground_pid);
+
+  IUIAutomationElement* element = nullptr;
+  if (FAILED(automation->GetFocusedElement(&element)) || element == nullptr) {
+    return result;
+  }
+
+  int pid = 0;
+  element->get_CurrentProcessId(&pid);
+  if (pid != static_cast<int>(foreground_pid)) {
+    element->Release();
+    return result;
+  }
+
+  VARIANT value;
+  VariantInit(&value);
+  bool password = false;
+  if (SUCCEEDED(element->GetCurrentPropertyValue(UIA_IsPasswordPropertyId, &value))) {
+    password = value.vt == VT_BOOL && value.boolVal == VARIANT_TRUE;
+  }
+  VariantClear(&value);
+  if (password) {
+    element->Release();
+    return result;
+  }
+
+  IUIAutomationTextPattern* pattern = nullptr;
+  if (FAILED(element->GetCurrentPatternAs(
+          UIA_TextPatternId, kIidTextPattern,
+          reinterpret_cast<void**>(&pattern))) ||
+      pattern == nullptr) {
+    element->Release();
+    return result;
+  }
+  element->Release();
+
+  IUIAutomationTextRangeArray* ranges = nullptr;
+  if (FAILED(pattern->GetSelection(&ranges)) || ranges == nullptr) {
+    pattern->Release();
+    return result;
+  }
+  pattern->Release();
+
+  int count = 0;
+  ranges->get_Length(&count);
+  if (count > 1) {
+    result.status = SelectionStatus::Refused;
+  } else if (count == 1) {
+    IUIAutomationTextRange* range = nullptr;
+    if (SUCCEEDED(ranges->GetElement(0, &range)) && range != nullptr) {
+      BSTR text = nullptr;
+      if (SUCCEEDED(range->GetText(static_cast<int>(kSelectionMaxChars + 100),
+                                   &text)) &&
+          text != nullptr) {
+        std::wstring value(text, SysStringLen(text));
+        SysFreeString(text);
+        if (!value.empty()) {
+          if (value.size() > kSelectionMaxChars ||
+              value.find_first_of(L"\r\n") != std::wstring::npos) {
+            result.status = SelectionStatus::Refused;
+          } else {
+            result.status = SelectionStatus::Text;
+            result.text = std::move(value);
+          }
+        }
+      }
+      range->Release();
+    }
+  }
+  ranges->Release();
+  return result;
 }
 
 }  // namespace
@@ -108,6 +198,28 @@ SecureState SecureWatcher::effective_state() const {
   return state_.load(std::memory_order_relaxed);
 }
 
+void SecureWatcher::request_selection() {
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!started_ || stop_) return;
+    selection_requested_ = true;
+    selection_consumed_ = false;
+    ++selection_request_id_;
+  }
+  cv_.notify_all();
+}
+
+bool SecureWatcher::take_selection(SelectionResult* result) {
+  if (result == nullptr) return false;
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (selection_consumed_ || selection_done_id_ < selection_request_id_) {
+    return false;
+  }
+  *result = selection_result_;
+  selection_consumed_ = true;
+  return true;
+}
+
 void SecureWatcher::worker() {
   const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
@@ -122,12 +234,34 @@ void SecureWatcher::worker() {
   }
 
   while (true) {
+    bool do_selection = false;
+    uint64_t selection_id = 0;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait_for(lock, std::chrono::milliseconds(kPollMilliseconds),
-                   [this] { return stop_ || refresh_; });
+                   [this] {
+                     return stop_ || refresh_ || selection_requested_;
+                   });
       if (stop_) break;
       refresh_ = false;
+      if (selection_requested_) {
+        selection_requested_ = false;
+        do_selection = true;
+        selection_id = selection_request_id_;
+      }
+    }
+
+    if (do_selection) {
+      busy_since_.store(GetTickCount64(), std::memory_order_relaxed);
+      SelectionResult result = query_selection(automation);
+      busy_since_.store(0, std::memory_order_relaxed);
+      {
+        std::lock_guard<std::mutex> guard(mutex_);
+        selection_result_ = std::move(result);
+        selection_done_id_ = selection_id;
+      }
+      cv_.notify_all();
+      continue;
     }
 
     const HWND foreground = GetForegroundWindow();

@@ -58,6 +58,12 @@ void FocusMonitor::refresh_layout() {
   }
 }
 
+void FocusMonitor::set_layout(HKL layout) {
+  if (layout == nullptr) return;
+  info_.layout = layout;
+  info_.lang = language_from_hkl(layout);
+}
+
 std::wstring FocusMonitor::process_name(DWORD pid) {
   if (pid == 0) return {};
   const auto cached = process_cache_.find(pid);

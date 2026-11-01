@@ -62,4 +62,21 @@ bool type_text(std::wstring_view text) {
   return send(inputs);
 }
 
+bool press_enter() {
+  INPUT down = {};
+  down.type = INPUT_KEYBOARD;
+  down.ki.wVk = VK_RETURN;
+  down.ki.wScan = static_cast<WORD>(MapVirtualKeyW(VK_RETURN, MAPVK_VK_TO_VSC));
+  down.ki.dwExtraInfo = static_cast<ULONG_PTR>(kInjectionTag);
+
+  INPUT up = down;
+  up.ki.dwFlags = KEYEVENTF_KEYUP;
+
+  std::vector<INPUT> inputs;
+  inputs.reserve(2);
+  inputs.push_back(down);
+  inputs.push_back(up);
+  return send(inputs);
+}
+
 }  // namespace lado::input

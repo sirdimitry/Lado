@@ -23,6 +23,7 @@ extern const wchar_t kAppWindowClass[];
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kApplyMessage = WM_APP + 2;
 constexpr UINT kShowSettingsMessage = WM_APP + 3;
+constexpr UINT kManualMessage = WM_APP + 4;
 
 class App {
  public:
@@ -42,14 +43,21 @@ class App {
     kCommandAbout,
     kCommandQuit,
   };
-  enum TimerId : UINT_PTR { kTimerState = 1, kTimerApply = 2 };
+  enum TimerId : UINT_PTR {
+    kTimerState = 1,
+    kTimerApply = 2,
+    kTimerSelection = 3,
+  };
 
   struct PendingEdit {
     std::wstring text;
     int delete_units = 0;
     HWND target = nullptr;
     HKL layout = nullptr;
+    Lang target_language = Lang::None;
     uint64_t generation = 0;
+    bool enter_after = false;
+    bool clear_after = false;
   };
 
   bool initialize();
@@ -73,8 +81,12 @@ class App {
   void show_settings();
   void show_about();
   void save_preferences();
-  void begin_manual_conversion();
-  void begin_edit(const Edit& edit, UINT delay_ms);
+  void handle_manual_conversion();
+  void convert_selection(const std::wstring& text);
+  void poll_selection();
+  void cancel_selection();
+  void begin_edit(const Edit& edit, UINT delay_ms, bool clear_after = false,
+                  bool enter_after = false);
   void apply_pending();
   void cancel_pending();
 
@@ -105,6 +117,10 @@ class App {
   bool accept_injected_ = false;  // QA only: see LADO_QA_ACCEPT_INJECTED
   std::wstring menu_process_;
   DWORD menu_pid_ = 0;
+  bool selection_pending_ = false;
+  uint64_t selection_generation_ = 0;
+  HWND selection_target_ = nullptr;
+  ULONGLONG selection_deadline_ = 0;
   bool caps_lock_ = false;
   bool shift_left_ = false;
   bool shift_right_ = false;

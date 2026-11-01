@@ -23,4 +23,8 @@ bool replace_backward(int delete_units, std::wstring_view text);
 
 bool type_text(std::wstring_view text);
 
+// Sends a bare Enter. Used when the original Enter was swallowed so the word
+// could be converted before it reached the chat/search box.
+bool press_enter();
+
 }  // namespace lado::input

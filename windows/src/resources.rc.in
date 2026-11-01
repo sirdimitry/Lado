@@ -15,8 +15,8 @@ IDR_LEXICON RCDATA "@LEXICON@"
 1 24 "@MANIFEST@"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 0,1,1,0
+ PRODUCTVERSION 0,1,1,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -29,12 +29,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "sirdimitry"
             VALUE "FileDescription", "Lado RU/EN keyboard layout companion"
-            VALUE "FileVersion", "0.1.0.0"
+            VALUE "FileVersion", "0.1.1.0"
             VALUE "InternalName", "Lado"
             VALUE "LegalCopyright", "MIT License"
             VALUE "OriginalFilename", "Lado.exe"
             VALUE "ProductName", "Lado for Windows"
-            VALUE "ProductVersion", "0.1.0.0"
+            VALUE "ProductVersion", "0.1.1.0"
         END
     END
     BLOCK "VarFileInfo"

@@ -122,7 +122,9 @@ public static class Qa
 
     public static IntPtr FindEdit(IntPtr parent)
     {
-        return FindWindowEx(parent, IntPtr.Zero, "Edit", null);
+        IntPtr edit = FindWindowEx(parent, IntPtr.Zero, "Edit", null);
+        if (edit == IntPtr.Zero) edit = FindWindowEx(parent, IntPtr.Zero, "RICHEDIT50W", null);
+        return edit;
     }
 
     public static bool Focus(IntPtr hwnd, IntPtr edit)
@@ -167,6 +169,13 @@ public static class Qa
             SendVirtualKey(0xA0, false);
             Thread.Sleep(50);
         }
+    }
+
+    public static void SendEnter()
+    {
+        SendVirtualKey(0x0D, true);
+        Thread.Sleep(20);
+        SendVirtualKey(0x0D, false);
     }
 
     public static void Dump(IntPtr pad)
@@ -228,7 +237,7 @@ function Read-Report([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return '<no report>' }
     $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     if ($null -eq $text) { return '' }
-    return [string]$text
+    return ([string]$text) -replace "`r`n", "`n" -replace "`r", "`n"
 }
 
 function Wait-ForPad {
@@ -246,11 +255,15 @@ function Invoke-Scenario {
         [string]$Label,
         [string]$Arguments,
         [bool]$ExpectCorrection,
-        [string]$ReportPath
+        [string]$ReportPath,
+        [string]$Mode = 'word',
+        [string]$Prefill = ''
     )
 
     Remove-Item -LiteralPath $ReportPath -ErrorAction SilentlyContinue
-    $startArguments = "$Arguments --report `"$ReportPath`""
+    $startArguments = $Arguments
+    if ($Prefill) { $startArguments += " --prefill `"$Prefill`"" }
+    $startArguments += " --report `"$ReportPath`""
     Start-Process -FilePath $PadPath -ArgumentList $startArguments | Out-Null
 
     $pad = Wait-ForPad
@@ -260,21 +273,59 @@ function Invoke-Scenario {
     [Qa]::Focus($pad, $edit) | Out-Null
     Start-Sleep -Milliseconds 800
 
+    if ($Mode -eq 'selection') {
+        Write-Host "[$Label] selected '$Prefill'"
+        [Qa]::DoubleShift()
+        Start-Sleep -Milliseconds 600
+        [Qa]::Dump($pad)
+        Start-Sleep -Milliseconds 200
+        $actual = Read-Report $ReportPath
+        if ($actual -ceq 'привет') {
+            Write-Host "PASS [$Label] selection: '$actual'"
+        } else {
+            Fail "[$Label] selection: expected 'привет', got '$actual'"
+        }
+        [Qa]::Close($pad) | Out-Null
+        Start-Sleep -Milliseconds 400
+        return
+    }
+
     $language = [Qa]::PrimaryLanguage($pad)
     if ($language -eq 0x09) {
         # English layout: physical g-h-b-d-t-n spells "ghbdtn".
-        $keys = [uint16[]](0x47, 0x48, 0x42, 0x44, 0x54, 0x4E, 0x20)
+        $wordKeys = [uint16[]](0x47, 0x48, 0x42, 0x44, 0x54, 0x4E)
         $typed = 'ghbdtn '
         $corrected = 'привет '
     } elseif ($language -eq 0x19) {
         # Russian layout: physical h-e-l-l-o spells "руддщ".
-        $keys = [uint16[]](0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x20)
+        $wordKeys = [uint16[]](0x48, 0x45, 0x4C, 0x4C, 0x4F)
         $typed = 'руддщ '
         $corrected = 'hello '
     } else {
         throw ("unexpected input layout 0x{0:x2}; enable English or Russian" -f $language)
     }
 
+    if ($Mode -eq 'enter') {
+        Write-Host "[$Label] layout=0x$($language.ToString('x2')), typing '$typed' + Enter"
+        [Qa]::TypeKeys($wordKeys)
+        Start-Sleep -Milliseconds 150
+        [Qa]::SendEnter()
+        Start-Sleep -Milliseconds 600
+        [Qa]::Dump($pad)
+        Start-Sleep -Milliseconds 200
+        $actual = Read-Report $ReportPath
+        $wanted = $corrected.TrimEnd() + "`n"
+        if ($actual -ceq $wanted) {
+            Write-Host "PASS [$Label] after Enter: '$actual'"
+        } else {
+            Fail "[$Label] after Enter: expected '$wanted', got '$actual'"
+        }
+        [Qa]::Close($pad) | Out-Null
+        Start-Sleep -Milliseconds 400
+        return
+    }
+
+    $keys = $wordKeys + [uint16]0x20
     Write-Host "[$Label] layout=0x$($language.ToString('x2')), typing '$typed'"
     [Qa]::TypeKeys($keys)
     Start-Sleep -Milliseconds 500
@@ -310,6 +361,8 @@ Start-Sleep -Milliseconds 400
 
 $textReport = Join-Path $env:TEMP 'lado-qa-text.txt'
 $passwordReport = Join-Path $env:TEMP 'lado-qa-password.txt'
+$selectionReport = Join-Path $env:TEMP 'lado-qa-selection.txt'
+$enterReport = Join-Path $env:TEMP 'lado-qa-enter.txt'
 
 $env:LADO_QA_ACCEPT_INJECTED = '1'
 try {
@@ -319,6 +372,8 @@ try {
 
     Invoke-Scenario -Label 'text field' -Arguments '' -ExpectCorrection $true -ReportPath $textReport
     Invoke-Scenario -Label 'password field' -Arguments '--password' -ExpectCorrection $false -ReportPath $passwordReport
+    Invoke-Scenario -Label 'selection' -Arguments '--select-all --richedit' -ExpectCorrection $true -ReportPath $selectionReport -Mode 'selection' -Prefill 'ghbdtn'
+    Invoke-Scenario -Label 'enter' -Arguments '' -ExpectCorrection $true -ReportPath $enterReport -Mode 'enter'
 } finally {
     Remove-Item Env:\LADO_QA_ACCEPT_INJECTED -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 300
@@ -329,5 +384,5 @@ try {
 }
 
 if ($script:failures -gt 0) { exit 1 }
-Write-Host 'PASS: 4 end-to-end checks'
+Write-Host 'PASS: 6 end-to-end checks'
 exit 0

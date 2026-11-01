@@ -62,6 +62,17 @@ class Buffer {
   std::optional<Edit> finish(std::wstring separator, bool automatic = true);
   std::optional<Edit> manual();
 
+  // "Undo the last edit" and "convert the last word" are separate actions for
+  // the manual gesture: the window may also contain a selection or a group.
+  bool has_undo() const { return last_edit_.has_value(); }
+  bool has_context() const { return !current_.empty() || !words_.empty(); }
+
+  // At least two completed words from the same typing session (<= 200 chars,
+  // <= 8 idle seconds). Used when automatic correction is off, mirroring
+  // Keyboop's group conversion.
+  bool group_available() const;
+  std::optional<Edit> manual_group();
+
   const std::wstring& current() const { return current_; }
   const std::deque<std::pair<std::wstring, std::wstring>>& words() const {
     return words_;
@@ -70,14 +81,24 @@ class Buffer {
   bool overflow() const { return overflow_; }
 
  private:
+  struct SessionWord {
+    std::wstring word;
+    std::wstring tail;
+  };
+
   void set_tail(std::wstring_view text);
+  void remember_completed(const std::wstring& word, const std::wstring& tail);
+  void trim_session();
+  size_t session_chars() const;
 
   Detector detector_;
   Clock clock_;
   std::deque<std::pair<std::wstring, std::wstring>> words_;
+  std::deque<SessionWord> session_;
   std::wstring current_;
   std::optional<Edit> last_edit_;
   double changed_ = 0.0;
+  double last_input_ = 0.0;
   bool overflow_ = false;
 };
 

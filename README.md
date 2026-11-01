@@ -24,10 +24,11 @@ boundaries](docs/PRIVACY.md), including password-field limitations and the optio
 
 The preview native Windows build lives in [`windows/`](windows/README.md):
 C++20 and the Win32 API only, no Python runtime, one portable `Lado.exe`.
-It covers automatic correction, double Shift for the last word, the RU/EN tray
-indicator, word/app exceptions, Pause and start with Windows. Selected-text
-conversion and update checks are not implemented yet; details and limitations
-are in [the Windows notes](docs/WINDOWS.md).
+It covers automatic correction, correction before Enter, double Shift for the
+last word / selection / whole phrase (manual mode), layout switching, the RU/EN
+tray indicator, word/app exceptions, Pause and start with Windows. Update checks
+are not implemented; details and limitations are in
+[the Windows notes](docs/WINDOWS.md).
 
 ## Status
 

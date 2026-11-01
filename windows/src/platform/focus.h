@@ -30,6 +30,10 @@ class FocusMonitor {
   // just-switched layout is not sampled stale.
   void refresh_layout();
 
+  // Adopts the layout Lado itself just selected, so the state timer does not
+  // mistake its own switch for a user change and drop the undo context.
+  void set_layout(HKL layout);
+
   const FocusInfo& info() const { return info_; }
 
  private:

@@ -11,6 +11,7 @@
 #include "platform/autostart.h"
 #include "platform/foreground.h"
 #include "platform/input.h"
+#include "platform/layout_switch.h"
 #include "platform/log.h"
 #include "resource.h"
 #include "strings.h"
@@ -180,6 +181,7 @@ void App::shutdown() {
   if (window_ != nullptr) {
     KillTimer(window_, kTimerState);
     KillTimer(window_, kTimerApply);
+    KillTimer(window_, kTimerSelection);
   }
   settings_window_.close();
   tray_.destroy();
@@ -253,11 +255,16 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     case kShowSettingsMessage:
       show_settings();
       return 0;
+    case kManualMessage:
+      handle_manual_conversion();
+      return 0;
     case WM_TIMER:
       if (wparam == kTimerState) {
         on_timer();
       } else if (wparam == kTimerApply) {
         apply_pending();
+      } else if (wparam == kTimerSelection) {
+        poll_selection();
       }
       return 0;
     case WM_COMMAND:
@@ -267,6 +274,7 @@ LRESULT App::handle(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
           paused_ = !paused_;
           buffer_->clear();
           cancel_pending();
+          cancel_selection();
           gesture_.clear();
           update_tray();
           update_status_window();
@@ -334,6 +342,7 @@ void App::on_system_event(DWORD event) {
     focus_.refresh();
     buffer_->clear();
     cancel_pending();
+    cancel_selection();
   }
   if (secure_ != nullptr) secure_->refresh_soon();
 }
@@ -386,14 +395,29 @@ bool App::on_key(const KeyEvent& event) {
     buffer_->backspace();
     return false;
   }
-  if (clear_context_key(vk)) {
-    buffer_->clear();
-    return false;
+  if (vk == VK_RETURN) {
+    // Enter sends chat messages, so a wrong-layout word must be fixed before
+    // the key reaches the app. Only a bare Enter is eligible.
+    if (shift_left_ || shift_right_ || !settings_.automatic) {
+      buffer_->clear();
+      return false;
+    }
+    auto edit = buffer_->finish(L"\n", true);
+    if (!edit) {
+      buffer_->clear();
+      return false;
+    }
+    begin_edit(*edit, 0, true, true);
+    return true;  // swallowed; a synthetic Enter follows the replacement
   }
   if (vk == VK_SPACE) {
     if (auto edit = buffer_->finish(L" ", settings_.automatic)) {
       begin_edit(*edit, 30);
     }
+    return false;
+  }
+  if (clear_context_key(vk)) {
+    buffer_->clear();
     return false;
   }
 
@@ -433,7 +457,9 @@ bool App::handle_shift(const KeyEvent& event) {
 
   if (gesture_.update(true, now_seconds(),
                       ctrl_down_ || alt_down_ || win_down_)) {
-    begin_manual_conversion();
+    // Selection reading can block on UI Automation, so never do it inside the
+    // low-level hook callback.
+    PostMessageW(window_, kManualMessage, 0, 0);
   }
   return false;
 }
@@ -441,6 +467,7 @@ bool App::handle_shift(const KeyEvent& event) {
 void App::on_mouse() {
   ++generation_;
   cancel_pending();
+  cancel_selection();
   buffer_->clear();
   gesture_.key_used();
 }
@@ -457,6 +484,7 @@ void App::refresh_state() {
       focus_.info().lang != previous_language) {
     buffer_->clear();
     cancel_pending();
+    cancel_selection();
   }
   update_tray();
   update_status_window();
@@ -572,28 +600,123 @@ void App::save_preferences() {
   }
 }
 
-void App::begin_manual_conversion() {
+void App::handle_manual_conversion() {
   if (!processing_allowed()) {
     buffer_->clear();
     return;
   }
-  auto edit = buffer_->manual();
-  if (!edit) return;
-  begin_edit(*edit, 1);
+
+  // 1. Undo the last automatic/manual edit.
+  if (buffer_->has_undo()) {
+    if (auto edit = buffer_->manual()) begin_edit(*edit, 0);
+    return;
+  }
+
+  // 2. Nothing typed since the last context break: the user is pointing at a
+  //    selection. Read it through UI Automation asynchronously, never through
+  //    the clipboard.
+  if (!buffer_->has_context()) {
+    if (selection_pending_) return;
+    selection_pending_ = true;
+    selection_generation_ = generation_;
+    selection_target_ = GetForegroundWindow();
+    selection_deadline_ = GetTickCount64() + 600;
+    secure_->request_selection();
+    SetTimer(window_, kTimerSelection, 20, nullptr);
+    return;
+  }
+
+  // 3. Manual mode (automatic off): convert the whole typed phrase. This is
+  //    Keyboop's flexible undo window without extra hotkeys.
+  if (!settings_.automatic && buffer_->group_available()) {
+    if (auto edit = buffer_->manual_group()) {
+      begin_edit(*edit, 0, true);
+    }
+    return;
+  }
+
+  // 4. Last word (or the word being typed).
+  if (auto edit = buffer_->manual()) begin_edit(*edit, 0);
 }
 
-void App::begin_edit(const Edit& edit, UINT delay_ms) {
+void App::convert_selection(const std::wstring& text) {
+  const Lang source = language_of(text);
+  if (source == Lang::None) return;
+  const Lang target = source == Lang::Ru ? Lang::En : Lang::Ru;
+
+  LayoutConverter converter;
+  const std::wstring converted = converter.convert(text, source);
+  if (converted == text) return;
+  if (!processing_allowed()) return;
+
+  if (!input::type_text(converted)) {
+    log_message(L"SendInput rejected a selection replacement (%zu units)",
+                text.size());
+    buffer_->clear();
+    return;
+  }
+  if (HKL layout = switch_to_language(target)) focus_.set_layout(layout);
+  buffer_->clear();
+}
+
+void App::poll_selection() {
+  if (!selection_pending_) {
+    KillTimer(window_, kTimerSelection);
+    return;
+  }
+  SelectionResult result;
+  if (secure_->take_selection(&result)) {
+    KillTimer(window_, kTimerSelection);
+    selection_pending_ = false;
+    if (result.status == SelectionStatus::Text &&
+        generation_ == selection_generation_ &&
+        GetForegroundWindow() == selection_target_) {
+      convert_selection(result.text);
+    } else if (result.status == SelectionStatus::Refused) {
+      log_message(L"selection refused: multiline, multi-range or too long");
+    }
+    return;
+  }
+  if (GetTickCount64() >= selection_deadline_) {
+    KillTimer(window_, kTimerSelection);
+    selection_pending_ = false;
+  }
+}
+
+void App::cancel_selection() {
+  selection_pending_ = false;
+  if (window_ != nullptr) KillTimer(window_, kTimerSelection);
+}
+void App::begin_edit(const Edit& edit, UINT delay_ms, bool clear_after,
+                     bool enter_after) {
   if (edit.before.empty() || edit.after.empty()) return;
   if (edit.before.size() > 1024 || edit.after.size() > 2048) return;
 
+  std::wstring text = edit.after;
+  int delete_units = static_cast<int>(edit.before.size());
+  if (enter_after) {
+    // The newline itself was swallowed; a real Enter is sent after the text.
+    if (!text.empty() && text.back() == L'\n') text.pop_back();
+    if (delete_units > 0) --delete_units;
+  }
+  if (delete_units < 0 || delete_units > 1024 || text.size() > 2048) return;
+
   PendingEdit pending;
-  pending.text = edit.after;
-  pending.delete_units = static_cast<int>(edit.before.size());
+  pending.text = std::move(text);
+  pending.delete_units = delete_units;
   pending.target = focus_.info().hwnd;
   pending.layout = focus_.info().layout;
+  pending.target_language = edit.target;
   pending.generation = generation_;
+  pending.enter_after = enter_after;
+  pending.clear_after = clear_after;
   pending_ = std::move(pending);
-  SetTimer(window_, kTimerApply, delay_ms, nullptr);
+
+  if (delay_ms == 0) {
+    PostMessageW(window_, kApplyMessage, 0, 0);
+  } else {
+    SetTimer(window_, kTimerApply, delay_ms, nullptr);
+  }
 }
 
 void App::apply_pending() {
@@ -603,8 +726,14 @@ void App::apply_pending() {
   KillTimer(window_, kTimerApply);
 
   // Any abandoned edit means the on-screen text no longer agrees with the
-  // buffer (the replacement never happened), so context is dropped.
-  auto abandon = [this] { buffer_->clear(); };
+  // buffer (the replacement never happened), so context is dropped. A
+  // swallowed Enter is released so the keypress is never lost.
+  auto abandon = [&] {
+    buffer_->clear();
+    if (pending.enter_after && GetForegroundWindow() == pending.target) {
+      input::press_enter();
+    }
+  };
 
   if (pending.generation != generation_) {
     abandon();
@@ -631,15 +760,26 @@ void App::apply_pending() {
     abandon();
     return;
   }
-  if (pending.delete_units <= 0 || pending.text.empty()) {
+  if (pending.delete_units < 0 || pending.text.empty()) {
     abandon();
     return;
   }
+
   if (!input::replace_backward(pending.delete_units, pending.text)) {
     log_message(L"SendInput rejected a replacement of %d units",
                 pending.delete_units);
-    abandon();
+    if (pending.enter_after) input::press_enter();
+    buffer_->clear();
+    return;
   }
+
+  if (pending.enter_after) input::press_enter();
+  if (pending.target_language != Lang::None) {
+    if (HKL layout = switch_to_language(pending.target_language)) {
+      focus_.set_layout(layout);
+    }
+  }
+  if (pending.clear_after) buffer_->clear();
 }
 
 void App::cancel_pending() {

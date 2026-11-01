@@ -40,7 +40,7 @@ constexpr UiStrings kRu{
     L"О Lado",
     L"Lado %s — раскладка RU/EN для Windows.\n\n"
     L"Локальная обработка: без истории ввода, телеметрии и сети.\n"
-    L"Двойной Shift конвертирует последнее слово.\n\n"
+    L"Двойной Shift: слово или выделение; в ручном режиме — вся фраза.\n\n"
     L"github.com/sirdimitry/Lado · MIT",
     L"Lado не смог перехватить клавиатуру. Перезапустите приложение; если ошибка "
     L"повторится, проверьте журнал %LOCALAPPDATA%\\Lado\\lado.log.",
@@ -83,7 +83,7 @@ constexpr UiStrings kEn{
     L"About Lado",
     L"Lado %s — a RU/EN keyboard layout companion for Windows.\n\n"
     L"Local processing: no typing history, telemetry or network access.\n"
-    L"Double Shift converts the last word.\n\n"
+    L"Double Shift fixes a word or selection; in manual mode, the whole phrase.\n\n"
     L"github.com/sirdimitry/Lado · MIT",
     L"Lado could not install its keyboard hook. Restart the app; if the error "
     L"persists, check %LOCALAPPDATA%\\Lado\\lado.log.",

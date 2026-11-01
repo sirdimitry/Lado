@@ -146,15 +146,18 @@ Buffer::Buffer(Detector detector, Clock clock)
 
 void Buffer::clear() {
   words_.clear();
+  session_.clear();
   current_.clear();
   last_edit_.reset();
   changed_ = clock_();
+  last_input_ = changed_;
   overflow_ = false;
 }
 
 void Buffer::touch() {
   if (clock_() - changed_ > kIdleSeconds) clear();
   changed_ = clock_();
+  last_input_ = changed_;
 }
 
 void Buffer::feed(std::wstring_view text) {
@@ -192,6 +195,7 @@ std::optional<Edit> Buffer::finish(std::wstring separator, bool automatic) {
       auto [word, sep] = words_.back();
       words_.pop_back();
       words_.emplace_back(word, sep + separator);
+      if (!session_.empty()) session_.back().tail += separator;
     } else {
       clear();
     }
@@ -224,6 +228,7 @@ std::optional<Edit> Buffer::finish(std::wstring separator, bool automatic) {
     if (auto fixed = detector_.correction(old, preceding, output)) {
       if (trim(old, kTailPunctuation).size() == 1) {
         words_.back().first = *fixed;
+        if (!session_.empty()) session_.back().word = *fixed;
         edit = Edit{old + sep + before, *fixed + sep + before,
                     language_of(*fixed)};
       }
@@ -232,6 +237,7 @@ std::optional<Edit> Buffer::finish(std::wstring separator, bool automatic) {
 
   words_.emplace_back(output, separator);
   while (words_.size() > 3) words_.pop_front();
+  remember_completed(output, separator);
   current_.clear();
   last_edit_ = edit;
   return edit;
@@ -244,6 +250,8 @@ std::optional<Edit> Buffer::manual() {
     Edit edit{old.after, old.before, language_of(old.before)};
     last_edit_ = edit;
     set_tail(edit.after);
+    // A reversed edit makes the session history unreliable for a group fix.
+    session_.clear();
     return edit;
   }
   if (overflow_) return std::nullopt;
@@ -268,8 +276,67 @@ std::optional<Edit> Buffer::manual() {
     current_ = after;
   } else {
     words_.back().first = after;
+    if (!session_.empty()) session_.back().word = after;
   }
   return edit;
+}
+
+bool Buffer::group_available() const {
+  if (session_.size() < 2) return false;
+  if (!current_.empty()) return false;
+  if (clock_() - last_input_ > 8.0) return false;
+  if (session_chars() > 200) return false;
+  for (const auto& item : session_) {
+    if (item.word.empty()) return false;
+    if (item.tail.find_first_of(L"\r\n") != std::wstring::npos) return false;
+  }
+  return true;
+}
+
+std::optional<Edit> Buffer::manual_group() {
+  if (!group_available()) return std::nullopt;
+
+  std::wstring before;
+  std::wstring after;
+  std::vector<std::wstring> previous;
+  Lang target = Lang::None;
+  bool converted_any = false;
+  for (const auto& item : session_) {
+    before += item.word + item.tail;
+    std::wstring output = item.word;
+    if (auto fixed = detector_.correction(item.word, previous)) {
+      output = *fixed;
+      target = language_of(output);
+      converted_any = true;
+    }
+    after += output + item.tail;
+    previous.push_back(output);
+  }
+
+  if (!converted_any || after == before) return std::nullopt;
+  if (before.empty() || before.size() > 1024 || after.size() > 2048) {
+    return std::nullopt;
+  }
+  last_edit_.reset();  // group conversion is not reversible as one edit
+  return Edit{before, after, target};
+}
+
+void Buffer::remember_completed(const std::wstring& word,
+                                const std::wstring& tail) {
+  session_.push_back(SessionWord{word, tail});
+  trim_session();
+}
+
+size_t Buffer::session_chars() const {
+  size_t total = 0;
+  for (const auto& item : session_) total += item.word.size() + item.tail.size();
+  return total;
+}
+
+void Buffer::trim_session() {
+  while (session_.size() > 1 && session_chars() > 200) {
+    session_.pop_front();
+  }
 }
 
 void Buffer::set_tail(std::wstring_view text) {

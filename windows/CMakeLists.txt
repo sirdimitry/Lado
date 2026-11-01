@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(LadoWindows VERSION 0.1.0 LANGUAGES CXX RC)
+project(LadoWindows VERSION 0.1.1 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,7 +14,7 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(LADO_VERSION_STRING "0.1.0-windows.1")
+set(LADO_VERSION_STRING "0.1.1-windows.1")
 
 add_library(lado_core STATIC
   src/engine.cpp
@@ -45,6 +45,7 @@ add_executable(Lado WIN32
   src/platform/foreground.cpp
   src/platform/hook.cpp
   src/platform/input.cpp
+  src/platform/layout_switch.cpp
   src/platform/log.cpp
   src/platform/secure.cpp
   src/platform/tray.cpp

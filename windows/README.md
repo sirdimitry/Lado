@@ -6,10 +6,10 @@ built on. No Electron, no .NET runtime, no bundled Python, no background
 service. The dictionary is embedded in the `.exe`, so the release artifact is a
 single portable file.
 
-**Status: preview `0.1.0-windows.1`.** Automatic correction and double-Shift
-work on ordinary Win32, WinUI and Chromium text fields; selected-text
-conversion and update checks are not implemented yet. See
-[the design and limitation notes](../docs/WINDOWS.md).
+**Status: preview `0.1.1-windows.1`.** Automatic correction, double-Shift of a
+word/selection/phrase, Enter pre-conversion and layout switching work on
+ordinary Win32, WinUI and Chromium text fields. Update checks are not
+implemented. See [the design and limitation notes](../docs/WINDOWS.md).
 
 ## What it does
 
@@ -18,8 +18,13 @@ conversion and update checks are not implemented yet. See
 - Corrects a confident wrong-layout word at a word boundary:
   `ghbdtn` + Space → `привет`. The decision uses the same local frequency
   dictionary and the same rules as the macOS app.
-- **Double Shift** converts the last observed word, or reverses the last
-  automatic/manual edit. It is checked on the second Shift press.
+- Fixes the word **before Enter** in chat and search boxes, so a wrong-layout
+  message is not sent.
+- Switches the application's layout to the language of the corrected text.
+- **Double Shift** is a single manual gesture with the same decision order as
+  Keyboop: undo the last edit → convert the selection → convert the whole typed
+  phrase when automatic correction is off → convert the last word. Selections
+  are read through UI Automation, never through the clipboard.
 - Skips ALL-CAPS words, digits, e-mail/URL-like tokens and mixed-script words.
 - Supports personal word exceptions (optionally case-sensitive) and
   per-application exclusions (`chrome.exe`, `Code.exe`, …).
@@ -30,11 +35,9 @@ conversion and update checks are not implemented yet. See
 
 ## Not implemented yet
 
-- Converting a **text selection**. Double Shift converts the last word; a
-  selection made with the mouse or Shift+arrows clears the short context, so
-  Lado deliberately does nothing rather than guess.
-- Switching the layout after a conversion. Like the macOS app, Lado converts
-  text and leaves the active layout alone.
+- **Multiline selections** and selections in controls that expose no UI
+  Automation `TextPattern` (classic `Edit`, some terminals). Single-line
+  selections in RichEdit, WinUI and Chromium-based apps are supported.
 - Update checks. The Windows binary makes no network requests at all.
 - Other language pairs; anything except an English or Russian layout pauses
   processing.
@@ -85,12 +88,16 @@ other language is active, Lado pauses rather than guessing.
 
 A `WH_KEYBOARD_LL` hook observes keys on the UI thread and converts the current
 layout's characters with `ToUnicodeEx`. A bounded buffer keeps at most three
-completed words and the current word. At a space boundary the detector compares
-dictionary weights and, when confident, schedules a replacement 30 ms later so
-the space has reached the target app. The replacement is one `SendInput` batch:
-N Backspaces followed by Unicode characters. Before writing, the app re-checks
-the foreground window, the layout, a generation counter, a fresh classic
-password check and the UIA password state. No clipboard, no `WM_SETTEXT`, no
+completed words plus the current word; a separate session list (200 characters,
+8 idle seconds) is used for phrase conversion. At a space boundary the detector
+compares dictionary weights and, when confident, schedules a replacement 30 ms
+later so the space has reached the target app. A bare Enter is swallowed, the
+word is fixed, then a synthetic Enter is sent. The replacement is one
+`SendInput` batch: N Backspaces followed by Unicode characters (a selection is
+overwritten directly). Before writing, the app re-checks the foreground window,
+the layout, a generation counter, a fresh classic password check and the UIA
+password state. The selected text, when used, is read asynchronously through
+UIA `TextPattern` on a worker thread. No clipboard, no `WM_SETTEXT`, no
 accessibility writes.
 
 ## Privacy boundaries
@@ -99,18 +106,22 @@ accessibility writes.
   file (`%LOCALAPPDATA%\Lado\lado.log`) contains error metadata, never typed
   text.
 - The in-memory buffer clears after 30 idle seconds, on focus/layout change, on
-  Pause, on mouse clicks/caret keys, and when a password field is detected.
-- The only UI Automation property read is `IsPassword` of the focused element;
-  Lado does not read field contents or the selection.
+  Pause, on mouse clicks/caret keys, and when a password field is detected. The
+  phrase session expires after 8 idle seconds.
+- UI Automation is used for two things only: the `IsPassword` property of the
+  focused element, and — when you press double Shift with nothing typed — the
+  selected text of the focused element (at most 500 characters, held in RAM for
+  the replacement). Password fields are never read.
 - There is no network code in this build. GitHub update checks exist only in
   the macOS app.
 
 ## Tests
 
-`lado_tests.exe` runs 166 checks: the shared regression corpus from
-`../tests/corpus.json`, dictionary-backed detection, buffer/manual-toggle
-semantics, double-Shift timing, JSON parsing and settings bounds. The test
-binary embeds paths to the repo data so `ctest` works from any build folder.
+`lado_tests.exe` runs 182 checks: the shared regression corpus from
+`../tests/corpus.json`, dictionary-backed detection, buffer/manual-toggle and
+phrase-session semantics, Enter boundaries, double-Shift timing, JSON parsing
+and settings bounds. The test binary embeds paths to the repo data so `ctest`
+works from any build folder.
 
 For an end-to-end check of the real hook and replacement path:
 
@@ -118,12 +129,12 @@ For an end-to-end check of the real hook and replacement path:
 powershell -ExecutionPolicy Bypass -File windows/tools/qa_typing.ps1
 ```
 
-It starts Lado with `LADO_QA_ACCEPT_INJECTED=1`, opens `LadoQaPad.exe`, types a
-wrong-layout word with `SendInput`, expects the correction and double-Shift
-reversal, then repeats the typing in a real `ES_PASSWORD` field and expects
-Lado to leave it untouched. **It takes the foreground for about eight
-seconds** — do not run it during a game or a call. The environment variable is
-only set for that process; a normal Lado session ignores injected input.
+It starts Lado with `LADO_QA_ACCEPT_INJECTED=1` and checks six cases with
+`SendInput` on `LadoQaPad.exe`: automatic correction, double-Shift reversal, a
+real `ES_PASSWORD` field (no correction), a RichEdit selection, and conversion
+before Enter. **It takes the foreground for about ten seconds** — do not run it
+during a game or a call. The environment variable is only set for that process;
+a normal Lado session ignores injected input.
 
 ## Regenerating checked-in artifacts
 

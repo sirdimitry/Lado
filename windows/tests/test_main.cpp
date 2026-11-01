@@ -337,8 +337,62 @@ void test_backspace(Fixture& fixture) {
   CHECK(!buffer.manual().has_value());
 }
 
-void test_gesture() {
-  DoubleShift gesture;
+void test_group_conversion(Fixture& fixture) {
+  Settings settings;
+  settings.automatic = false;
+  double now = 0.0;
+  Buffer buffer(
+      fixture.buffer(Detector(settings, fixture.lexicon()), [&] { return now; }));
+
+  auto type_word = [&](const std::wstring& word) {
+    buffer.feed(word);
+    return buffer.finish(L" ", false);
+  };
+
+  CHECK(!type_word(L"ghbdtn").has_value());
+  CHECK(!buffer.group_available());  // one word is not a group
+  CHECK(!type_word(L"vbh").has_value());
+  CHECK(buffer.group_available());
+
+  auto edit = buffer.manual_group();
+  CHECK(edit.has_value());
+  if (edit) {
+    CHECK_EQ(edit->before, W("ghbdtn vbh "));
+    CHECK_EQ(edit->after, W("привет мир "));
+    CHECK(edit->target == Lang::Ru);
+  }
+
+  now = 9.0;  // past the 8 second session window
+  CHECK(!buffer.group_available());
+
+  // Valid words inside the group are preserved.
+  Buffer mixed(fixture.buffer(Detector(settings, fixture.lexicon())));
+  mixed.feed(L"hello");
+  mixed.finish(L" ", false);
+  mixed.feed(L"ghbdtn");
+  mixed.finish(L" ", false);
+  auto mixed_edit = mixed.manual_group();
+  CHECK(mixed_edit.has_value());
+  if (mixed_edit) {
+    CHECK_EQ(mixed_edit->before, W("hello ghbdtn "));
+    CHECK_EQ(mixed_edit->after, W("hello привет "));
+  }
+}
+
+void test_enter_boundary(Fixture& fixture) {
+  Settings settings;
+  Buffer buffer(fixture.buffer(Detector(settings, fixture.lexicon())));
+  buffer.feed(L"ghbdtn");
+  auto edit = buffer.finish(L"\n", true);
+  CHECK(edit.has_value());
+  if (edit) {
+    CHECK_EQ(edit->before, W("ghbdtn\n"));
+    CHECK_EQ(edit->after, W("привет\n"));
+    CHECK(edit->target == Lang::Ru);
+  }
+}
+
+void test_gesture() {  DoubleShift gesture;
   CHECK(!gesture.update(true, 0.0));
   CHECK(!gesture.update(false, 0.05));
   CHECK(gesture.update(true, 0.15));
@@ -489,6 +543,8 @@ int main(int argc, char** argv) {
   test_idle_clear(fixture);
   test_clear_removes_undo(fixture);
   test_backspace(fixture);
+  test_group_conversion(fixture);
+  test_enter_boundary(fixture);
   test_gesture();
   test_json();
   test_settings_roundtrip();
