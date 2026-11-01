@@ -119,10 +119,11 @@ powershell -ExecutionPolicy Bypass -File windows/tools/qa_typing.ps1
 ```
 
 It starts Lado with `LADO_QA_ACCEPT_INJECTED=1`, opens `LadoQaPad.exe`, types a
-wrong-layout word with `SendInput`, expects the correction, then expects double
-Shift to reverse it. **It takes the foreground for about five seconds** — do not
-run it during a game or a call. The environment variable is only set for that
-process; a normal Lado session ignores injected input.
+wrong-layout word with `SendInput`, expects the correction and double-Shift
+reversal, then repeats the typing in a real `ES_PASSWORD` field and expects
+Lado to leave it untouched. **It takes the foreground for about eight
+seconds** — do not run it during a game or a call. The environment variable is
+only set for that process; a normal Lado session ignores injected input.
 
 ## Regenerating checked-in artifacts
 

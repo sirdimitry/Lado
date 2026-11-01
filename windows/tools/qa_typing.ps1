@@ -12,7 +12,8 @@
 #   6. repeats the typing in a real password field and expects no correction.
 #
 # The environment variable only exists for this QA process; a normal Lado
-# session ignores all injected input.
+# session ignores all injected input. The pad writes its own text to a report
+# file, so password fields can be read without cross-process WM_GETTEXT.
 
 param(
     [string]$LadoPath = (Join-Path $PSScriptRoot '..\build\Lado.exe'),
@@ -92,27 +93,6 @@ public static class Qa
     [DllImport("user32.dll")]
     private static extern bool IsWindow(IntPtr hwnd);
 
-    public static IntPtr Foreground()
-    {
-        return GetForegroundWindow();
-    }
-
-    public static void RestoreForeground(IntPtr hwnd)
-    {
-        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return;
-        uint pid;
-        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
-        uint targetThread = GetWindowThreadProcessId(hwnd, out pid);
-        bool attached = false;
-        if (foregroundThread != 0 && targetThread != 0 &&
-            foregroundThread != targetThread)
-        {
-            attached = AttachThreadInput(foregroundThread, targetThread, true);
-        }
-        SetForegroundWindow(hwnd);
-        if (attached) AttachThreadInput(foregroundThread, targetThread, false);
-    }
-
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
 
@@ -134,14 +114,6 @@ public static class Qa
     [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr hwnd, uint message,
                                            IntPtr wparam, IntPtr lparam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SendMessageText(IntPtr hwnd, uint message,
-                                                 IntPtr wparam, StringBuilder lparam);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessageValue(IntPtr hwnd, uint message,
-                                                  IntPtr wparam, IntPtr lparam);
 
     public static IntPtr FindPad()
     {
@@ -197,6 +169,37 @@ public static class Qa
         }
     }
 
+    public static void Dump(IntPtr pad)
+    {
+        PostMessage(pad, 0x8001, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    public static IntPtr Foreground()
+    {
+        return GetForegroundWindow();
+    }
+
+    public static void RestoreForeground(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return;
+        uint pid;
+        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        uint targetThread = GetWindowThreadProcessId(hwnd, out pid);
+        bool attached = false;
+        if (foregroundThread != 0 && targetThread != 0 &&
+            foregroundThread != targetThread)
+        {
+            attached = AttachThreadInput(foregroundThread, targetThread, true);
+        }
+        SetForegroundWindow(hwnd);
+        if (attached) AttachThreadInput(foregroundThread, targetThread, false);
+    }
+
+    public static void Close(IntPtr hwnd)
+    {
+        PostMessage(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
+    }
+
     private static void SendVirtualKey(ushort key, bool down)
     {
         INPUT input = new INPUT();
@@ -212,19 +215,6 @@ public static class Qa
             throw new InvalidOperationException("SendInput failed");
         }
     }
-
-    public static string EditText(IntPtr edit)
-    {
-        int length = (int)SendMessageValue(edit, 0x000E, IntPtr.Zero, IntPtr.Zero);
-        StringBuilder builder = new StringBuilder(length + 2);
-        SendMessageText(edit, 0x000D, (IntPtr)(length + 1), builder);
-        return builder.ToString();
-    }
-
-    public static void Close(IntPtr hwnd)
-    {
-        PostMessage(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero);
-    }
 }
 '@
 
@@ -232,6 +222,13 @@ $script:failures = 0
 function Fail([string]$message) {
     Write-Host "FAIL: $message" -ForegroundColor Red
     $script:failures++
+}
+
+function Read-Report([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return '<no report>' }
+    $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ($null -eq $text) { return '' }
+    return [string]$text
 }
 
 function Wait-ForPad {
@@ -248,14 +245,14 @@ function Invoke-Scenario {
     param(
         [string]$Label,
         [string]$Arguments,
-        [bool]$ExpectCorrection
+        [bool]$ExpectCorrection,
+        [string]$ReportPath
     )
 
-    if ($Arguments) {
-        Start-Process -FilePath $PadPath -ArgumentList $Arguments | Out-Null
-    } else {
-        Start-Process -FilePath $PadPath | Out-Null
-    }
+    Remove-Item -LiteralPath $ReportPath -ErrorAction SilentlyContinue
+    $startArguments = "$Arguments --report `"$ReportPath`""
+    Start-Process -FilePath $PadPath -ArgumentList $startArguments | Out-Null
+
     $pad = Wait-ForPad
     $edit = [Qa]::FindEdit($pad)
     if ($edit -eq [IntPtr]::Zero) { throw 'QA pad edit control not found' }
@@ -281,7 +278,9 @@ function Invoke-Scenario {
     Write-Host "[$Label] layout=0x$($language.ToString('x2')), typing '$typed'"
     [Qa]::TypeKeys($keys)
     Start-Sleep -Milliseconds 500
-    $actual = [Qa]::EditText($edit)
+    [Qa]::Dump($pad)
+    Start-Sleep -Milliseconds 200
+    $actual = Read-Report $ReportPath
     $wanted = if ($ExpectCorrection) { $corrected } else { $typed }
     if ($actual -ceq $wanted) {
         Write-Host "PASS [$Label] after Space: '$actual'"
@@ -291,7 +290,9 @@ function Invoke-Scenario {
 
     [Qa]::DoubleShift()
     Start-Sleep -Milliseconds 500
-    $reverted = [Qa]::EditText($edit)
+    [Qa]::Dump($pad)
+    Start-Sleep -Milliseconds 200
+    $reverted = Read-Report $ReportPath
     if ($reverted -ceq $typed) {
         Write-Host "PASS [$Label] after double Shift: '$reverted'"
     } else {
@@ -307,14 +308,17 @@ $previousForeground = [Qa]::Foreground()
 Get-Process -Name Lado -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
 
+$textReport = Join-Path $env:TEMP 'lado-qa-text.txt'
+$passwordReport = Join-Path $env:TEMP 'lado-qa-password.txt'
+
 $env:LADO_QA_ACCEPT_INJECTED = '1'
 try {
     Write-Host "Starting $LadoPath"
     Start-Process -FilePath $LadoPath | Out-Null
     Start-Sleep -Milliseconds 800
 
-    Invoke-Scenario -Label 'text field' -Arguments '' -ExpectCorrection $true
-    Invoke-Scenario -Label 'password field' -Arguments '--password' -ExpectCorrection $false
+    Invoke-Scenario -Label 'text field' -Arguments '' -ExpectCorrection $true -ReportPath $textReport
+    Invoke-Scenario -Label 'password field' -Arguments '--password' -ExpectCorrection $false -ReportPath $passwordReport
 } finally {
     Remove-Item Env:\LADO_QA_ACCEPT_INJECTED -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 300

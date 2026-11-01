@@ -143,10 +143,13 @@ at 16 px.
   `tests/corpus.json` used by the Python suite; detection, conversion, buffer,
   gesture, JSON and settings tests mirror `tests/test_engine.py`.
 - `windows/tools/qa_typing.ps1`: end-to-end check of the actual hook and
-  replacement path through `LadoQaPad.exe`. It sets
-  `LADO_QA_ACCEPT_INJECTED=1` for the Lado process so `SendInput` from the
-  harness is observed; Lado's own events carry a `dwExtraInfo` tag and are
-  always ignored.
+  replacement path through `LadoQaPad.exe`. In a normal field it expects the
+  automatic correction and its double-Shift reversal; in an `ES_PASSWORD` field
+  it expects both to be suppressed. It sets `LADO_QA_ACCEPT_INJECTED=1` for the
+  Lado process so `SendInput` from the harness is observed; Lado's own events
+  carry a `dwExtraInfo` tag and are always ignored. The pad writes its text to
+  a report file so password content never has to cross the `WM_GETTEXT`
+  boundary.
 - `.github/workflows/windows.yml`: MSVC build and `ctest` on `windows-latest`.
 
 ## Parity with macOS
