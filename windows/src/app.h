@@ -53,6 +53,7 @@ class App {
     std::wstring text;
     int delete_units = 0;
     HWND target = nullptr;
+    HWND focus = nullptr;
     HKL layout = nullptr;
     Lang target_language = Lang::None;
     uint64_t generation = 0;

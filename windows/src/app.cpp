@@ -59,10 +59,22 @@ std::wstring format_tooltip(const wchar_t* format, const std::wstring& value) {
   return buffer;
 }
 
+HWND focused_control() {
+  const HWND foreground = GetForegroundWindow();
+  if (foreground == nullptr) return nullptr;
+  const DWORD thread = GetWindowThreadProcessId(foreground, nullptr);
+  if (thread == 0) return foreground;
+  GUITHREADINFO info = {};
+  info.cbSize = sizeof(info);
+  if (GetGUIThreadInfo(thread, &info) && info.hwndFocus != nullptr) {
+    return info.hwndFocus;
+  }
+  return foreground;
+}
+
 // Cheap, synchronous password check for classic edit controls. The UIA worker
 // covers Chromium/UWP, but this one cannot be stale.
-bool focused_classic_password() {
-  const HWND foreground = GetForegroundWindow();
+bool focused_classic_password() {  const HWND foreground = GetForegroundWindow();
   if (foreground == nullptr) return false;
   const DWORD thread = GetWindowThreadProcessId(foreground, nullptr);
   if (thread == 0) return false;
@@ -705,6 +717,7 @@ void App::begin_edit(const Edit& edit, UINT delay_ms, bool clear_after,
   pending.text = std::move(text);
   pending.delete_units = delete_units;
   pending.target = focus_.info().hwnd;
+  pending.focus = focused_control();
   pending.layout = focus_.info().layout;
   pending.target_language = edit.target;
   pending.generation = generation_;
@@ -745,6 +758,10 @@ void App::apply_pending() {
   }
   focus_.refresh();
   if (focus_.info().hwnd != pending.target) {
+    abandon();
+    return;
+  }
+  if (focused_control() != pending.focus) {
     abandon();
     return;
   }
