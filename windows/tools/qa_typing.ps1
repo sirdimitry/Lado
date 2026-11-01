@@ -90,6 +90,30 @@ public static class Qa
     private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hwnd);
+
+    public static IntPtr Foreground()
+    {
+        return GetForegroundWindow();
+    }
+
+    public static void RestoreForeground(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return;
+        uint pid;
+        uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        uint targetThread = GetWindowThreadProcessId(hwnd, out pid);
+        bool attached = false;
+        if (foregroundThread != 0 && targetThread != 0 &&
+            foregroundThread != targetThread)
+        {
+            attached = AttachThreadInput(foregroundThread, targetThread, true);
+        }
+        SetForegroundWindow(hwnd);
+        if (attached) AttachThreadInput(foregroundThread, targetThread, false);
+    }
+
+    [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
@@ -279,6 +303,7 @@ function Invoke-Scenario {
 }
 
 Write-Host 'Stopping any running Lado...'
+$previousForeground = [Qa]::Foreground()
 Get-Process -Name Lado -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
 
@@ -295,6 +320,8 @@ try {
     Start-Sleep -Milliseconds 300
     Get-Process -Name Lado -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-Process -Name LadoQaPad -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Milliseconds 300
+    [Qa]::RestoreForeground($previousForeground)
 }
 
 if ($script:failures -gt 0) { exit 1 }

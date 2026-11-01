@@ -1,5 +1,9 @@
 #include "secure.h"
 
+// WIN32_LEAN_AND_MEAN keeps OLE out of <windows.h>, but the SDK's UI Automation
+// headers require COM/OLE declarations (interface, IUnknown, VARIANT).
+#include <ole2.h>
+#include <oleauto.h>
 #include <UIAutomation.h>
 
 #include <chrono>
